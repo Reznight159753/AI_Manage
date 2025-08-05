@@ -1,106 +1,73 @@
-// src/components/ResetPassword.js
-import React, { useState } from 'react';
-import './ResetPassword.css';
+//src/components/ResetNewPassword.js
+import React, { useState } from "react";
+import "./ResetPassword.css";
+import lockImage from "../assets/images/41.png";
+import assistantIcon from "../assets/icons/icon.svg";
 
-const ResetPassword = () => {
-  const [step, setStep] = useState(1);
-  const [email, setEmail] = useState('');
-  const [code, setCode] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
+const ResetNewPassword = () => {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
 
-  const handleSendCode = (e) => {
+  const handleReset = (e) => {
     e.preventDefault();
-    // Giả lập gửi mã
-    if (email.includes('@')) {
-      setStep(2);
-    } else {
-      alert('Vui lòng nhập email hợp lệ');
-    }
-  };
-
-  const handleVerifyCode = (e) => {
-    e.preventDefault();
-    if (code.trim().length === 6) {
-      setStep(3);
-    } else {
-      alert('Mã xác nhận gồm 6 ký tự');
-    }
-  };
-
-  const handleResetPassword = (e) => {
-    e.preventDefault();
-    if (newPassword !== confirmPassword) {
-      alert('Mật khẩu không khớp!');
+    if (password !== confirm) {
+      alert("Mật khẩu không khớp");
       return;
     }
-    alert('Mật khẩu của bạn đã được đặt lại thành công!');
-    // Reset form
-    setStep(1);
-    setEmail('');
-    setCode('');
-    setNewPassword('');
-    setConfirmPassword('');
+    alert("Đặt lại mật khẩu thành công!");
   };
 
   return (
-    <div className="reset-container">
-      <div className="reset-box">
-        <h2>Khôi phục mật khẩu</h2>
-        {step === 1 && (
-          <form onSubmit={handleSendCode}>
-            <label>Email</label>
-            <input
-              type="email"
-              placeholder="Nhập email của bạn"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
+    <div className="resetpw-container">
+      <div className="resetpw-content">
+        <div className="header">
+          <div className="logo-container">
+            <img
+              src={assistantIcon}
+              alt="Assistant Icon"
+              className="logo-icon"
             />
-            <button type="submit">Gửi mã</button>
-          </form>
-        )}
+            <h2 className="app-title">Trợ lý ảo</h2>
+          </div>
+        </div>
 
-        {step === 2 && (
-          <form onSubmit={handleVerifyCode}>
-            <label>Mã xác nhận</label>
-            <input
-              type="text"
-              placeholder="Nhập mã 6 chữ số"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              required
-            />
-            <button type="submit">Xác minh</button>
-          </form>
-        )}
+        <div className="resetpw-main">
+          <div className="resetpw-form-container">
+            <h1 className="form-title">Đặt mật khẩu</h1>
+            <p className="form-subtitle">
+              Tạo mật khẩu mới cho tài khoản của bạn.
+            </p>
 
-        {step === 3 && (
-          <form onSubmit={handleResetPassword}>
-            <label>Mật khẩu mới</label>
-            <input
-              type="password"
-              placeholder="Nhập mật khẩu mới"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              required
-            />
+            <form onSubmit={handleReset} className="resetpw-form">
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="input-field"
+                placeholder="Mật khẩu mới"
+                required
+              />
+              <input
+                type="password"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                className="input-field"
+                placeholder="Nhập lại mật khẩu"
+                required
+              />
+              <button type="submit" className="resetpw-button">
+                Đặt mật khẩu
+              </button>
+            </form>
+          </div>
 
-            <label>Nhập lại mật khẩu</label>
-            <input
-              type="password"
-              placeholder="Xác nhận mật khẩu"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              required
-            />
-
-            <button type="submit">Đặt lại mật khẩu</button>
-          </form>
-        )}
+          <div className="resetpw-image-container">
+            <img src={lockImage} alt="Reset" className="resetpw-image" />
+          </div>
+        </div>
       </div>
     </div>
   );
 };
 
-export default ResetPassword;
+export default ResetNewPassword;
