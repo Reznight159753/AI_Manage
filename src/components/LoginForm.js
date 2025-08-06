@@ -100,7 +100,7 @@ const LoginForm = () => {
 
               <div className="signup-link">
                 <span>Bạn không có tài khoản? </span>
-                <a href="#" className="signup-text">Đăng ký</a>
+                <Link to="/register" className="signup-text">Đăng ký</Link>
               </div>
 
               <div className="divider">

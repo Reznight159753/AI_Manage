@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import "./App.css";
 import ModelDesign from "./components/ModelDesign";
 import LoginForm from "./components/LoginForm";
+import RegisterForm from "./components/RegisterForm";
 import ForgotPassword from "./components/ForgotPassword";
 import ResetPassword from "./components/ResetPassword";
 
@@ -13,6 +14,7 @@ function App() {
         <Routes>
           <Route path="/" element={<ModelDesign />} />
           <Route path="/login" element={<LoginForm />} />
+          <Route path="/register" element={<RegisterForm />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
         </Routes>
