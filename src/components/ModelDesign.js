@@ -191,7 +191,7 @@ function Avatar({ avatar_url, speak, setSpeak, text, setAudioSource, playing }) 
 
   return (
     <group name="avatar">
-      <primitive object={gltf.scene} dispose={null} position={[0, 0, 0]} />
+      <primitive object={gltf.scene} dispose={null} position={[-0.1, 0.5, 0]} scale={[0.6, 0.6, 0.6]} />
     </group>
   );
 }
@@ -228,25 +228,23 @@ function ModelDesign() {
   const [audioSource, setAudioSource] = useState(null);
   const [playing, setPlaying] = useState(false);
   
-  // States cho chat interface
-  const [activeChat, setActiveChat] = useState(1);
-  const [chatSessions, setChatSessions] = useState([
+  // State cho màn hình mobile
+  const [isMobile, setIsMobile] = useState(false);
+  
+  // State cho hiệu ứng typing animation
+  const [displayedText, setDisplayedText] = useState("");
+  const [isTyping, setIsTyping] = useState(false);
+  const typingSpeed = 30; // Tốc độ typing cố định (ms)
+  
+  // States cho chat interface - đơn giản hóa
+  const [messages, setMessages] = useState([
     {
       id: 1,
-      title: "Chat với Arwen",
-      lastMessage: "Xin chào! Tôi là Arwen...",
-      timestamp: new Date(),
-      messages: [
-        {
-          id: 1,
-          type: 'ai',
-          content: 'Xin chào! Tôi là Arwen. Tôi có thể nói bất cứ điều gì bạn muốn. Hãy nhập tin nhắn và tôi sẽ trả lời bạn.',
-          timestamp: new Date()
-        }
-      ]
+      type: 'ai',
+      content: 'Xin chào! Tôi là Arwen. Tôi có thể nói bất cứ điều gì bạn muốn. Hãy nhập tin nhắn và tôi sẽ trả lời bạn.',
+      timestamp: new Date()
     }
   ]);
-  const [messages, setMessages] = useState(chatSessions[0].messages);
   const [currentTime, setCurrentTime] = useState(
     new Date().toLocaleTimeString('en-US', { 
       hour: '2-digit', 
@@ -255,6 +253,19 @@ function ModelDesign() {
       hour12: true 
     }) + ' +07, ' + new Date().toLocaleDateString('en-GB')
   );
+
+  // Kiểm tra kích thước màn hình
+  useEffect(() => {
+    const checkScreenSize = () => {
+      const isMobileScreen = window.innerWidth <= 768 || 
+                           (window.innerWidth < window.innerHeight && window.innerWidth <= 1024);
+      setIsMobile(isMobileScreen);
+    };
+
+    checkScreenSize();
+    window.addEventListener('resize', checkScreenSize);
+    return () => window.removeEventListener('resize', checkScreenSize);
+  }, []);
 
   // Cập nhật thời gian
   useEffect(() => {
@@ -271,20 +282,32 @@ function ModelDesign() {
     return () => clearInterval(timer);
   }, []);
 
+  // Typing animation effect
+  useEffect(() => {
+    if (!speechText || !isTyping) return;
+    
+    let index = 0;
+    setDisplayedText("");
+    
+    const timer = setInterval(() => {
+      setDisplayedText(speechText.slice(0, index + 1));
+      index++;
+      
+      if (index >= speechText.length) {
+        clearInterval(timer);
+        setIsTyping(false);
+      }
+    }, typingSpeed);
+    
+    return () => clearInterval(timer);
+  }, [speechText, isTyping]);
+
   // Tự động scroll xuống cuối khi có tin nhắn mới
   useEffect(() => {
     if (chatAreaRef.current) {
       chatAreaRef.current.scrollTop = chatAreaRef.current.scrollHeight;
     }
   }, [messages]);
-
-  // Cập nhật messages khi chuyển chat
-  useEffect(() => {
-    const currentChat = chatSessions.find(chat => chat.id === activeChat);
-    if (currentChat) {
-      setMessages(currentChat.messages);
-    }
-  }, [activeChat, chatSessions]);
 
   // Audio player handlers
   function playerEnded() {
@@ -316,16 +339,9 @@ function ModelDesign() {
       timestamp: new Date()
     };
 
-    // Cập nhật messages và chat sessions
+    // Cập nhật messages
     const newMessages = [...messages, userMessage];
     setMessages(newMessages);
-    
-    // Cập nhật chat session hiện tại
-    setChatSessions(prev => prev.map(chat => 
-      chat.id === activeChat 
-        ? { ...chat, messages: newMessages, lastMessage: text.trim(), timestamp: new Date() }
-        : chat
-    ));
 
     // Chuẩn bị cho phản hồi AI
     const currentText = text.trim();
@@ -343,55 +359,11 @@ function ModelDesign() {
       const updatedMessages = [...newMessages, aiMessage];
       setMessages(updatedMessages);
       
-      // Cập nhật chat session với tin nhắn AI
-      setChatSessions(prev => prev.map(chat => 
-        chat.id === activeChat 
-          ? { ...chat, messages: updatedMessages, lastMessage: aiMessage.content, timestamp: new Date() }
-          : chat
-      ));
-      
       // Sử dụng nội dung AI để tạo giọng nói
       setSpeechText(aiMessage.content);
+      setIsTyping(true);
       setSpeak(true);
     }, 100);
-  }
-
-  function createNewChat() {
-    const newChatId = Date.now();
-    const newChat = {
-      id: newChatId,
-      title: `Chat ${chatSessions.length + 1}`,
-      lastMessage: "Cuộc trò chuyện mới",
-      timestamp: new Date(),
-      messages: [
-        {
-          id: 1,
-          type: 'ai',
-          content: 'Xin chào! Đây là cuộc trò chuyện mới. Tôi có thể giúp gì cho bạn?',
-          timestamp: new Date()
-        }
-      ]
-    };
-    
-    setChatSessions(prev => [newChat, ...prev]);
-    setActiveChat(newChatId);
-    setText("");
-  }
-
-  function switchChat(chatId) {
-    setActiveChat(chatId);
-  }
-
-  function deleteChat(chatId, e) {
-    e.stopPropagation();
-    if (chatSessions.length <= 1) return;
-    
-    setChatSessions(prev => prev.filter(chat => chat.id !== chatId));
-    
-    if (activeChat === chatId) {
-      const remainingChats = chatSessions.filter(chat => chat.id !== chatId);
-      setActiveChat(remainingChats[0].id);
-    }
   }
 
   function handleLogin() {
@@ -410,55 +382,32 @@ function ModelDesign() {
   }
 
   return (
-    <div className="container">
-      {/* Sidebar */}
-      <div className="sidebar">
-        <div className="sidebar-header">
-          <button onClick={createNewChat} className="new-chat-button">
-            ➕ Đoạn chat mới
-          </button>
+    <div className={`container ${isMobile ? 'mobile-layout' : 'desktop-layout'}`}>
+      {/* Header - hiện trên cùng khi mobile */}
+      {isMobile && (
+        <div className="mobile-header">
+          <div className="avatar-info">
+            <div className="avatar-icon">A</div>
+            <div className="avatar-name">Arwen AI</div>
+          </div>
+          <div className="header-right">
+            <div className="current-time">{currentTime}</div>
+            <button onClick={handleLogin} className="login-button">
+              Đăng nhập
+            </button>
+          </div>
         </div>
-        
-        <div className="chat-list">
-          {chatSessions.map((chat) => (
-            <div
-              key={chat.id}
-              className={`chat-item ${activeChat === chat.id ? 'active-chat-item' : ''}`}
-              onClick={() => switchChat(chat.id)}
-            >
-              <div className="chat-item-content">
-                <div className="chat-title">{chat.title}</div>
-                <div className="chat-preview">{chat.lastMessage}</div>
-              </div>
-              <div className="chat-time">
-                {chat.timestamp.toLocaleTimeString('vi-VN', { 
-                  hour: '2-digit', 
-                  minute: '2-digit' 
-                })}
-              </div>
-              {chatSessions.length > 1 && (
-                <button
-                  onClick={(e) => deleteChat(chat.id, e)}
-                  className="delete-button"
-                  title="Xóa cuộc trò chuyện"
-                >
-                  🗑️
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
-      {/* Middle Panel - Model 3D */}
-      <div className="middle-panel">
+      {/* Model 3D Panel */}
+      <div className="model-panel">
         <Canvas dpr={2} onCreated={(ctx) => {
           ctx.gl.physicallyCorrectLights = true;
         }}>
           <OrthographicCamera
             makeDefault
-            zoom={2000}
-            position={[0, 1.65, 1]}
+            zoom={isMobile ? 800 : 1300}
+            position={[0, 1.5, 1]}
           />
 
           <Suspense fallback={null}>
@@ -481,38 +430,53 @@ function ModelDesign() {
           </Suspense>
         </Canvas>
         <Loader dataInterpolation={(p) => `Đang tải... vui lòng đợi`} />
+        
+        {/* Speech Bubble trong model */}
+        {(displayedText || isTyping) && (
+          <div className={`speech-bubble ${isMobile ? 'mobile-bubble' : ''}`}>
+            <div className="bubble-text">
+              {displayedText}
+              {isTyping && <span className="typing-cursor">|</span>}
+            </div>
+            <div className="bubble-tail"></div>
+          </div>
+        )}
       </div>
 
-      {/* Right Panel - Chat Area */}
-      <div className="right-panel">
-        {/* Header */}
-        <div className="header_model">
-          <div className="avatar-info">
-            <div className="avatar-icon">A</div>
-            <div className="avatar-name">Arwen AI</div>
-          </div>
-          <div className="header-right">
-            <div className="current-time">{currentTime}</div>
-            <button onClick={handleLogin} className="login-button">
-              Đăng nhập
-            </button>
-          </div>
-        </div>
-
-        {/* Chat Messages */}
-        <div className="chat-area" ref={chatAreaRef}>
-          {messages.map((message) => (
-            <div
-              key={message.id}
-              className={`message ${message.type === 'user' ? 'user-message' : 'ai-message'}`}
-            >
-              {message.content}
+      {/* Chat Panel */}
+      <div className="chat-panel">
+        {/* Header cho desktop */}
+        {!isMobile && (
+          <div className="header_model">
+            <div className="avatar-info">
+              <div className="avatar-icon">A</div>
+              <div className="avatar-name">Arwen AI</div>
             </div>
-          ))}
-        </div>
+            <div className="header-right">
+              <div className="current-time">{currentTime}</div>
+              <button onClick={handleLogin} className="login-button">
+                Đăng nhập
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Chat Messages - chỉ hiện trên desktop */}
+        {!isMobile && (
+          <div className="chat-area" ref={chatAreaRef}>
+            {messages.map((message) => (
+              <div
+                key={message.id}
+                className={`message ${message.type === 'user' ? 'user-message' : 'ai-message'}`}
+              >
+                {message.content}
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Input Area */}
-        <div className="input-area">
+        <div className={`input-area ${isMobile ? 'mobile-only-input' : ''}`}>
           <div className="input-container">
             <textarea
               className="text-input"
