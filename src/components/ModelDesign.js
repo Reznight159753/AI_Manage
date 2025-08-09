@@ -13,7 +13,22 @@ import { SRGBColorSpace, LinearSRGBColorSpace } from 'three';
 import './ModelDesign.css';
 const _ = require('lodash');
 
-const host = 'http://localhost:5000';
+const host = 'http://localhost:5000'; // Server TTS
+
+// AI Endpoints - sử dụng proxy để tránh CORS
+const AI_ENDPOINTS = [
+  //'http://localhost:3001/api/ai',  // Proxy server
+  'http://192.168.1.32:8000'      // Fallback: Direct connection
+];
+
+// Utility function để tạo UUID v4
+function generateUUID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    var r = Math.random() * 16 | 0;
+    var v = c == 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
 
 // Hàm làm sạch văn bản tại frontend - chỉ loại bỏ ký tự đặc biệt nguy hiểm
 function cleanText(text) {
@@ -134,7 +149,7 @@ function Avatar({ avatar_url, speak, setSpeak, text, setAudioSource, playing }) 
 
   useEffect(() => {
     if (!speak) return;
-    console.log('Gửi văn bản tới server:', text);
+    console.log('Gửi văn bản tới server TTS:', text);
     makeSpeech(text)
       .then(response => {
         let { blendData, filename } = response.data;
@@ -196,14 +211,104 @@ function Avatar({ avatar_url, speak, setSpeak, text, setAudioSource, playing }) 
   );
 }
 
+// Hàm gọi API TTS (giữ nguyên)
 function makeSpeech(text) {
   const cleanedText = cleanText(text);
-  console.log('Văn bản gửi đi:', cleanedText);
+  console.log('Văn bản gửi đi TTS:', cleanedText);
   if (!cleanedText) {
     console.error('Lỗi: Văn bản sau khi làm sạch là rỗng');
     return Promise.reject(new Error('Văn bản rỗng sau khi làm sạch'));
   }
   return axios.post(host + '/talk', { text: cleanedText, language: 'vi-VN', voice: 'vi-VN-HoaiMy' });
+}
+
+// Hàm gọi API AI Assistant với React proxy
+async function callAIAssistant(userInput, sessionId) {
+  console.log('🔥 Starting AI Assistant call...');
+  
+  // Sử dụng relative URL khi có proxy trong package.json
+  const endpoints = [
+    '/ask',  // React proxy sẽ forward đến http://192.168.1.31:8000
+    'http://localhost:3001/api/ai/ask',  // Proxy server backup
+    'http://192.168.1.31:8000/ask'       // Direct connection backup
+  ];
+  
+  for (const endpoint of endpoints) {
+    try {
+      console.log(`🔌 Attempting connection to: ${endpoint}`);
+      
+      // Tạo axios instance với cấu hình CORS tốt hơn
+      const axiosConfig = {
+        timeout: 15000, // Tăng timeout lên 15s
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          // Thêm headers để bypass một số CORS issues
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        },
+        // Tắt credentials để tránh CORS preflight
+        withCredentials: false,
+        // Thêm cấu hình để handle các network issues
+        validateStatus: function (status) {
+          return status >= 200 && status < 300; // Chỉ accept status codes từ 200-299
+        }
+      };
+
+      console.log('📤 Sending request with data:', { 
+        user_input: userInput, 
+        session_id: sessionId 
+      });
+
+      const response = await axios.post(endpoint, {
+        user_input: userInput,
+        session_id: sessionId
+      }, axiosConfig);
+      
+      console.log('✅ Response received:', response.data);
+      
+      // Kiểm tra response data
+      if (response.data && response.data.response) {
+        console.log('🎉 Successfully got AI response');
+        return response.data.response;
+      } else {
+        console.warn('⚠️ Response không có data.response field');
+        return response.data || 'Phản hồi không hợp lệ từ server.';
+      }
+      
+    } catch (error) {
+      console.error(`❌ Error with ${endpoint}:`, error);
+      
+      // Log chi tiết các loại lỗi
+      if (error.code === 'ECONNREFUSED') {
+        console.log('🚫 Connection refused - Server may be offline');
+      } else if (error.code === 'ERR_NETWORK') {
+        console.log('🚫 Network error - Possible CORS issue');
+      } else if (error.code === 'ENOTFOUND') {
+        console.log('🚫 Host not found - Check IP address');
+      } else if (error.response) {
+        console.log(`📡 Server error: ${error.response.status} - ${error.response.statusText}`);
+        console.log('Response data:', error.response.data);
+      } else if (error.request) {
+        console.log('📤 Request made but no response received');
+        console.log('Request config:', error.config);
+      } else {
+        console.log('❓ Unknown error:', error.message);
+      }
+      
+      // Continue với endpoint tiếp theo thay vì return ngay
+      continue;
+    }
+  }
+  
+  // Nếu tất cả endpoints đều fail
+  console.log('💥 All endpoints failed');
+  return `Xin lỗi, tôi không thể kết nối đến server AI lúc này. Về "${userInput}", tôi sẽ cố gắng hỗ trợ bạn khi kết nối được khôi phục. Vui lòng kiểm tra:
+  
+1. Server AI có đang chạy không?
+2. Địa chỉ IP 192.168.1.31:8000 có đúng không?
+3. Firewall/CORS có đang chặn không?`;
 }
 
 function Bg() {
@@ -221,6 +326,9 @@ function ModelDesign() {
   const audioPlayer = useRef();
   const chatAreaRef = useRef();
   
+  // Session ID - tạo UUID duy nhất cho mỗi phiên
+  const [sessionId] = useState(() => generateUUID());
+  
   // States cho model 3D
   const [speak, setSpeak] = useState(false);
   const [text, setText] = useState("");
@@ -236,12 +344,18 @@ function ModelDesign() {
   const [isTyping, setIsTyping] = useState(false);
   const typingSpeed = 30; // Tốc độ typing cố định (ms)
   
-  // States cho chat interface - đơn giản hóa
+  // State cho trạng thái loading
+  const [isProcessing, setIsProcessing] = useState(false);
+  
+  // State cho connection status
+  const [connectionStatus, setConnectionStatus] = useState('checking');
+  
+  // States cho chat interface
   const [messages, setMessages] = useState([
     {
       id: 1,
       type: 'ai',
-      content: 'Xin chào! Tôi là Arwen. Tôi có thể nói bất cứ điều gì bạn muốn. Hãy nhập tin nhắn và tôi sẽ trả lời bạn.',
+      content: 'Xin chào! Tôi là Arwen, trợ lý AI của bạn. Tôi có thể trò chuyện và trả lời các câu hỏi của bạn. Hãy nhập tin nhắn để bắt đầu!',
       timestamp: new Date()
     }
   ]);
@@ -253,6 +367,27 @@ function ModelDesign() {
       hour12: true 
     }) + ' +07, ' + new Date().toLocaleDateString('en-GB')
   );
+
+  // Test connection khi component mount
+  useEffect(() => {
+    const testConnection = async () => {
+      console.log('🔍 Testing connection to AI server...');
+      try {
+        const response = await callAIAssistant('test', sessionId);
+        if (response.includes('không thể kết nối')) {
+          setConnectionStatus('failed');
+        } else {
+          setConnectionStatus('connected');
+          console.log('✅ Connection test successful');
+        }
+      } catch (error) {
+        setConnectionStatus('failed');
+        console.log('❌ Connection test failed:', error);
+      }
+    };
+    
+    testConnection();
+  }, [sessionId]);
 
   // Kiểm tra kích thước màn hình
   useEffect(() => {
@@ -309,6 +444,12 @@ function ModelDesign() {
     }
   }, [messages]);
 
+  // Debug: Log session ID và connection status
+  useEffect(() => {
+    console.log('Session ID:', sessionId);
+    console.log('Connection Status:', connectionStatus);
+  }, [sessionId, connectionStatus]);
+
   // Audio player handlers
   function playerEnded() {
     setAudioSource(null);
@@ -328,10 +469,9 @@ function ModelDesign() {
     setText(cleanedText);
   }
 
-  function handleSend() {
-    if (!text.trim() || speak) return;
+  async function handleSend() {
+    if (!text.trim() || isProcessing) return;
 
-    // Thêm tin nhắn của user
     const userMessage = {
       id: Date.now(),
       type: 'user',
@@ -339,31 +479,62 @@ function ModelDesign() {
       timestamp: new Date()
     };
 
-    // Cập nhật messages
+    // Cập nhật messages với tin nhắn user
     const newMessages = [...messages, userMessage];
     setMessages(newMessages);
 
-    // Chuẩn bị cho phản hồi AI
-    const currentText = text.trim();
+    // Lưu input và clear
+    const currentInput = text.trim();
     setText("");
-    
-    // Thêm tin nhắn AI và kích hoạt speech
-    setTimeout(() => {
+    setIsProcessing(true);
+
+    try {
+      console.log('🚀 Sending message to AI:', currentInput);
+      
+      // Gọi AI API với improved error handling
+      const aiResponse = await callAIAssistant(currentInput, sessionId);
+      
+      console.log('🤖 AI Response received:', aiResponse);
+      
+      // Tạo tin nhắn AI
       const aiMessage = {
         id: Date.now() + 1,
         type: 'ai',
-        content: `Tôi hiểu bạn nói: "${currentText}". Tôi sẽ lặp lại nội dung này.`,
+        content: aiResponse,
         timestamp: new Date()
       };
       
+      // Cập nhật messages với phản hồi AI
       const updatedMessages = [...newMessages, aiMessage];
       setMessages(updatedMessages);
       
-      // Sử dụng nội dung AI để tạo giọng nói
-      setSpeechText(aiMessage.content);
-      setIsTyping(true);
-      setSpeak(true);
-    }, 100);
+      // Chỉ kích hoạt speech nếu không phải error message
+      if (!aiResponse.includes('không thể kết nối')) {
+        setSpeechText(aiResponse);
+        setIsTyping(true);
+        setSpeak(true);
+        setConnectionStatus('connected');
+      } else {
+        setConnectionStatus('failed');
+      }
+      
+    } catch (error) {
+      console.error('💥 Error in handleSend:', error);
+      
+      // Thêm tin nhắn lỗi chi tiết hơn
+      const errorMessage = {
+        id: Date.now() + 1,
+        type: 'ai',
+        content: `Xin lỗi, đã xảy ra lỗi khi xử lý yêu cầu: ${error.message}. Vui lòng kiểm tra kết nối mạng và thử lại.`,
+        timestamp: new Date()
+      };
+      
+      const updatedMessages = [...newMessages, errorMessage];
+      setMessages(updatedMessages);
+      setConnectionStatus('failed');
+    }
+    
+    setIsProcessing(false);
   }
 
   function handleLogin() {
@@ -388,7 +559,14 @@ function ModelDesign() {
         <div className="mobile-header">
           <div className="avatar-info">
             <div className="avatar-icon">A</div>
-            <div className="avatar-name">Arwen AI</div>
+            <div className="avatar-name">
+              Arwen AI 
+              <span className={`connection-status ${connectionStatus}`}>
+                {connectionStatus === 'connected' && '🟢'}
+                {connectionStatus === 'failed' && '🔴'}
+                {connectionStatus === 'checking' && '🟡'}
+              </span>
+            </div>
           </div>
           <div className="header-right">
             <div className="current-time">{currentTime}</div>
@@ -450,7 +628,16 @@ function ModelDesign() {
           <div className="header_model">
             <div className="avatar-info">
               <div className="avatar-icon">A</div>
-              <div className="avatar-name">Arwen AI</div>
+              <div className="avatar-name">
+                Arwen AI
+                <span className={`connection-status ${connectionStatus}`}>
+                  {connectionStatus === 'connected' && '🟢'}
+                  {connectionStatus === 'failed' && '🔴'}
+                  {connectionStatus === 'checking' && '🟡'}
+                </span>
+              </div>
+              {/* <div className="session-info">Session: {sessionId.substring(0, 8)}...</div> */}
+              <div className="session-info">Session: {sessionId}</div>
             </div>
             <div className="header-right">
               <div className="current-time">{currentTime}</div>
@@ -464,6 +651,18 @@ function ModelDesign() {
         {/* Chat Messages - chỉ hiện trên desktop */}
         {!isMobile && (
           <div className="chat-area" ref={chatAreaRef}>
+            {/* Connection status message */}
+            {connectionStatus === 'failed' && (
+              <div className="message system-message">
+                🔴 Lỗi kết nối AI Server. Đang cố gắng kết nối lại...
+              </div>
+            )}
+            {connectionStatus === 'connected' && messages.length === 1 && (
+              <div className="message system-message">
+                🟢 Đã kết nối thành công với AI Server!
+              </div>
+            )}
+            
             {messages.map((message) => (
               <div
                 key={message.id}
@@ -472,6 +671,17 @@ function ModelDesign() {
                 {message.content}
               </div>
             ))}
+            {/* Loading indicator */}
+            {isProcessing && (
+              <div className="message ai-message processing">
+                <div className="typing-indicator">
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                </div>
+                ...
+              </div>
+            )}
           </div>
         )}
 
@@ -485,19 +695,21 @@ function ModelDesign() {
               onKeyPress={handleKeyPress}
               placeholder="Nhập tin nhắn của bạn..."
               rows={1}
+              disabled={isProcessing}
             />
             <div className="button-group">
               <button
                 onClick={handleSend}
-                className={`send-button ${(!text.trim() || speak) ? 'disabled-button' : ''}`}
-                disabled={!text.trim() || speak}
+                className={`send-button ${(!text.trim() || isProcessing) ? 'disabled-button' : ''}`}
+                disabled={!text.trim() || isProcessing}
               >
-                {speak ? 'Đang gửi...' : 'Gửi'}
+                {isProcessing ? '...' : 'Gửi'}
               </button>
               <button
                 onClick={handleVoiceChat}
                 className="voice-button"
                 title="Voice Chat (Chưa khả dụng)"
+                disabled={isProcessing}
               >
                 🎤
               </button>

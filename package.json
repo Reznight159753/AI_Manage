@@ -1,5 +1,6 @@
 {
   "name": "login-interface",
+  "proxy": "http://192.168.1.32:8000",
   "version": "0.1.0",
   "private": true,
   "dependencies": {
@@ -10,6 +11,9 @@
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^13.5.0",
     "axios": "^1.11.0",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "http-proxy-middleware": "^3.0.5",
     "react": "^19.1.1",
     "react-audio-player": "^0.17.0",
     "react-dom": "^19.1.1",
