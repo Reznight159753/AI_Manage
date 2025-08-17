@@ -10,6 +10,8 @@ import blinkData from '../blendDataBlink.json';
 import * as THREE from 'three';
 import axios from 'axios';
 import { SRGBColorSpace, LinearSRGBColorSpace } from 'three';
+import { Send, Loader2 } from "lucide-react";
+import { Mic, MicOff } from "lucide-react";
 import './ModelDesign.css';
 const _ = require('lodash');
 
@@ -18,7 +20,7 @@ const host = 'http://localhost:5000'; // Server TTS
 // AI Endpoints - sử dụng proxy để tránh CORS
 const AI_ENDPOINTS = [
   //'http://localhost:3001/api/ai',  // Proxy server
-  'http://192.168.1.32:8000'      // Fallback: Direct connection
+  'https://3457667e6b5a.ngrok-free.app/'      // Fallback: Direct connection
 ];
 
 // Utility function để tạo UUID v4
@@ -224,18 +226,18 @@ function makeSpeech(text) {
 
 // Hàm gọi API AI Assistant với React proxy
 async function callAIAssistant(userInput, sessionId) {
-  console.log('🔥 Starting AI Assistant call...');
+  console.log('Starting AI Assistant call...');
   
   // Sử dụng relative URL khi có proxy trong package.json
   const endpoints = [
     '/ask',  // React proxy sẽ forward đến http://192.168.1.31:8000
     'http://localhost:3001/api/ai/ask',  // Proxy server backup
-    'http://192.168.1.31:8000/ask'       // Direct connection backup
+    'https://3457667e6b5a.ngrok-free.app/ask'       // Direct connection backup
   ];
   
   for (const endpoint of endpoints) {
     try {
-      console.log(`🔌 Attempting connection to: ${endpoint}`);
+      console.log(`Attempting connection to: ${endpoint}`);
       
       // Tạo axios instance với cấu hình CORS tốt hơn
       const axiosConfig = {
@@ -256,7 +258,7 @@ async function callAIAssistant(userInput, sessionId) {
         }
       };
 
-      console.log('📤 Sending request with data:', { 
+      console.log('Sending request with data:', { 
         user_input: userInput, 
         session_id: sessionId 
       });
@@ -266,35 +268,35 @@ async function callAIAssistant(userInput, sessionId) {
         session_id: sessionId
       }, axiosConfig);
       
-      console.log('✅ Response received:', response.data);
+      console.log('Response received:', response.data);
       
       // Kiểm tra response data
       if (response.data && response.data.response) {
-        console.log('🎉 Successfully got AI response');
+        console.log('Successfully got AI response');
         return response.data.response;
       } else {
-        console.warn('⚠️ Response không có data.response field');
+        console.warn('Response không có data.response field');
         return response.data || 'Phản hồi không hợp lệ từ server.';
       }
       
     } catch (error) {
-      console.error(`❌ Error with ${endpoint}:`, error);
+      console.error(`Error with ${endpoint}:`, error);
       
       // Log chi tiết các loại lỗi
       if (error.code === 'ECONNREFUSED') {
-        console.log('🚫 Connection refused - Server may be offline');
+        console.log('Connection refused - Server may be offline');
       } else if (error.code === 'ERR_NETWORK') {
-        console.log('🚫 Network error - Possible CORS issue');
+        console.log('Network error - Possible CORS issue');
       } else if (error.code === 'ENOTFOUND') {
-        console.log('🚫 Host not found - Check IP address');
+        console.log('Host not found - Check IP address');
       } else if (error.response) {
-        console.log(`📡 Server error: ${error.response.status} - ${error.response.statusText}`);
+        console.log(`Server error: ${error.response.status} - ${error.response.statusText}`);
         console.log('Response data:', error.response.data);
       } else if (error.request) {
-        console.log('📤 Request made but no response received');
+        console.log('Request made but no response received');
         console.log('Request config:', error.config);
       } else {
-        console.log('❓ Unknown error:', error.message);
+        console.log('Unknown error:', error.message);
       }
       
       // Continue với endpoint tiếp theo thay vì return ngay
@@ -311,6 +313,7 @@ async function callAIAssistant(userInput, sessionId) {
 3. Firewall/CORS có đang chặn không?`;
 }
 
+
 function Bg() {
   const texture = useTexture('/images/bg.webp');
   return (
@@ -325,6 +328,10 @@ function ModelDesign() {
   const navigate = useNavigate();
   const audioPlayer = useRef();
   const chatAreaRef = useRef();
+  // State cho voice recording
+  const [isRecording, setIsRecording] = useState(false);
+  const [mediaRecorder, setMediaRecorder] = useState(null);
+  const [audioChunks, setAudioChunks] = useState([]);
   
   // Session ID - tạo UUID duy nhất cho mỗi phiên
   const [sessionId] = useState(() => generateUUID());
@@ -450,8 +457,160 @@ function ModelDesign() {
     console.log('Connection Status:', connectionStatus);
   }, [sessionId, connectionStatus]);
 
-  // Audio player handlers
-  function playerEnded() {
+  // Hàm gọi API Speech-to-Text
+  async function callSpeechToText(audioBlob) {
+    const formData = new FormData();
+    formData.append('file', audioBlob, 'recording.wav');
+
+    const endpoints = [
+      'https://57a835eeb2ec.ngrok-free.app/transcribe',
+      '/transcribe', // Nếu có proxy
+    ];
+
+    for (const endpoint of endpoints) {
+      try {
+        console.log(`Calling Speech-to-Text: ${endpoint}`);
+        
+        const response = await axios.post(endpoint, formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+          timeout: 30000, // 30s cho upload audio
+        });
+
+        console.log('Speech-to-Text response:', response.data);
+        return response.data.text || response.data.transcription || '';
+        
+      } catch (error) {
+        console.error(`STT Error with ${endpoint}:`, error);
+        continue;
+      }
+    }
+    
+    throw new Error('Không thể kết nối đến Speech-to-Text server');
+  }
+  // Bắt đầu recording
+  async function startRecording() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          sampleRate: 16000,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true
+        } 
+      });
+      
+      const recorder = new MediaRecorder(stream, {
+        mimeType: 'audio/webm;codecs=opus'
+      });
+      
+      const chunks = [];
+      
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunks.push(event.data);
+        }
+      };
+      
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(chunks, { type: 'audio/webm' });
+        await processVoiceInput(audioBlob);
+        
+        // Dừng tất cả tracks
+        stream.getTracks().forEach(track => track.stop());
+      };
+      
+      recorder.start();
+      setMediaRecorder(recorder);
+      setAudioChunks(chunks);
+      setIsRecording(true);
+      
+      console.log('🎤 Started recording...');
+      
+    } catch (error) {
+      console.error('❌ Error starting recording:', error);
+      alert('Không thể truy cập microphone. Vui lòng cho phép quyền truy cập.');
+    }
+  }
+
+  // Dừng recording
+  function stopRecording() {
+    if (mediaRecorder && isRecording) {
+      mediaRecorder.stop();
+      setIsRecording(false);
+      setMediaRecorder(null);
+      console.log('⏹️ Stopped recording');
+    }
+  }
+
+  // Xử lý voice input
+  async function processVoiceInput(audioBlob) {
+    setIsProcessing(true);
+    
+    try {
+      // Convert to WAV if needed
+      const wavBlob = await convertToWav(audioBlob);
+      
+      // Gọi Speech-to-Text API
+      console.log('🔄 Converting speech to text...');
+      const transcribedText = await callSpeechToText(wavBlob);
+      
+      if (transcribedText.trim()) {
+        // Set text vào input
+        setText(transcribedText);
+        
+        // Tự động gửi luôn
+        const userMessage = {
+          id: Date.now(),
+          type: 'user',
+          content: transcribedText.trim(),
+          timestamp: new Date()
+        };
+
+        const newMessages = [...messages, userMessage];
+        setMessages(newMessages);
+
+        // Gọi AI
+        const aiResponse = await callAIAssistant(transcribedText, sessionId);
+        
+        const aiMessage = {
+          id: Date.now() + 1,
+          type: 'ai',
+          content: aiResponse,
+          timestamp: new Date()
+        };
+        
+        setMessages([...newMessages, aiMessage]);
+        
+        if (!aiResponse.includes('không thể kết nối')) {
+          setSpeechText(aiResponse);
+          setIsTyping(true);
+          setSpeak(true);
+          setConnectionStatus('connected');
+        }
+        
+        setText(""); // Clear input
+      } else {
+        alert('Không nhận dạng được giọng nói. Vui lòng thử lại.');
+      }
+      
+    } catch (error) {
+      console.error('❌ Voice processing error:', error);
+      alert('Lỗi xử lý giọng nói: ' + error.message);
+    }
+    
+    setIsProcessing(false);
+  }
+
+// Convert audio to WAV format
+  async function convertToWav(audioBlob) {
+    // Đơn giản hóa: return blob gốc, server sẽ handle conversion
+    return audioBlob;
+  }
+
+// Audio player handlers
+function playerEnded() {
     setAudioSource(null);
     setSpeak(false);
     setPlaying(false);
@@ -465,8 +624,8 @@ function ModelDesign() {
   // Chat handlers
   function handleTextChange(e) {
     const value = e.target.value.substring(0, 500);
-    const cleanedText = cleanText(value);
-    setText(cleanedText);
+    //const cleanedText = cleanText(value);
+    setText(value);
   }
 
   async function handleSend() {
@@ -549,7 +708,11 @@ function ModelDesign() {
   }
 
   function handleVoiceChat() {
-    alert('Chức năng Voice Chat sẽ được phát triển trong tương lai!');
+    if (isRecording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
   }
 
   return (
@@ -679,7 +842,6 @@ function ModelDesign() {
                   <span></span>
                   <span></span>
                 </div>
-                ...
               </div>
             )}
           </div>
@@ -703,15 +865,15 @@ function ModelDesign() {
                 className={`send-button ${(!text.trim() || isProcessing) ? 'disabled-button' : ''}`}
                 disabled={!text.trim() || isProcessing}
               >
-                {isProcessing ? '...' : 'Gửi'}
+                {isProcessing ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />}
               </button>
               <button
                 onClick={handleVoiceChat}
-                className="voice-button"
-                title="Voice Chat (Chưa khả dụng)"
+                className={`voice-button ${isRecording ? 'recording' : ''}`}
+                // title={isRecording ? "Dừng ghi âm" : "Bắt đầu ghi âm"}
                 disabled={isProcessing}
               >
-                🎤
+                {isRecording ? <MicOff size={16} /> : <Mic size={16} />}
               </button>
             </div>
           </div>
