@@ -1,6 +1,6 @@
 {
   "name": "login-interface",
-  "proxy": "https://3457667e6b5a.ngrok-free.app",
+  "proxy": "https://3a686927e9b9.ngrok-free.app/",
   "version": "0.1.0",
   "private": true,
   "dependencies": {
@@ -14,7 +14,7 @@
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "http-proxy-middleware": "^3.0.5",
-    "lucide-react": "^0.539.0",
+    "lucide-react": "^0.540.0",
     "react": "^19.1.1",
     "react-audio-player": "^0.17.0",
     "react-dom": "^19.1.1",

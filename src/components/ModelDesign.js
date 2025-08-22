@@ -20,7 +20,7 @@ const host = 'http://localhost:5000'; // Server TTS
 // AI Endpoints - sử dụng proxy để tránh CORS
 const AI_ENDPOINTS = [
   //'http://localhost:3001/api/ai',  // Proxy server
-  'https://3457667e6b5a.ngrok-free.app/'      // Fallback: Direct connection
+  'https://3a686927e9b9.ngrok-free.app/'      // Fallback: Direct connection
 ];
 
 // Utility function để tạo UUID v4
@@ -226,93 +226,149 @@ function makeSpeech(text) {
 
 // Hàm gọi API AI Assistant với React proxy
 async function callAIAssistant(userInput, sessionId) {
-  console.log('Starting AI Assistant call...');
-  
-  // Sử dụng relative URL khi có proxy trong package.json
   const endpoints = [
-    '/ask',  // React proxy sẽ forward đến http://192.168.1.31:8000
+    '/ask',  // React proxy
     'http://localhost:3001/api/ai/ask',  // Proxy server backup
-    'https://3457667e6b5a.ngrok-free.app/ask'       // Direct connection backup
+    'https://3a686927e9b9.ngrok-free.app/ask'  // Direct connection backup
   ];
   
   for (const endpoint of endpoints) {
     try {
-      console.log(`Attempting connection to: ${endpoint}`);
-      
-      // Tạo axios instance với cấu hình CORS tốt hơn
-      const axiosConfig = {
-        timeout: 15000, // Tăng timeout lên 15s
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          // Thêm headers để bypass một số CORS issues
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type'
-        },
-        // Tắt credentials để tránh CORS preflight
-        withCredentials: false,
-        // Thêm cấu hình để handle các network issues
-        validateStatus: function (status) {
-          return status >= 200 && status < 300; // Chỉ accept status codes từ 200-299
-        }
-      };
-
-      console.log('Sending request with data:', { 
-        user_input: userInput, 
-        session_id: sessionId 
-      });
-
       const response = await axios.post(endpoint, {
         user_input: userInput,
         session_id: sessionId
-      }, axiosConfig);
+      }, {
+        timeout: 50000,
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        withCredentials: false
+      });
       
-      console.log('Response received:', response.data);
+      // Debug: Log response để xem structure
+      console.log('API Response:', response.data);
       
-      // Kiểm tra response data
-      if (response.data && response.data.response) {
-        console.log('Successfully got AI response');
-        return response.data.response;
-      } else {
-        console.warn('Response không có data.response field');
-        return response.data || 'Phản hồi không hợp lệ từ server.';
+      const responseData = response.data;
+      
+      // Xử lý response theo thứ tự ưu tiên
+      // 1. Nếu response là string trực tiếp
+      if (typeof responseData === 'string' && responseData.trim()) {
+        return responseData.trim();
       }
+      
+      // 2. Nếu response có các field thông thường
+      if (responseData?.response && typeof responseData.response === 'string') {
+        return responseData.response.trim();
+      }
+      
+      if (responseData?.answer && typeof responseData.answer === 'string') {
+        return responseData.answer.trim();
+      }
+      
+      if (responseData?.message && typeof responseData.message === 'string') {
+        return responseData.message.trim();
+      }
+      
+      if (responseData?.data && typeof responseData.data === 'string') {
+        return responseData.data.trim();
+      }
+      
+      // 3. Nếu response là object, thử convert thành string
+      if (typeof responseData === 'object' && responseData !== null) {
+        // Nếu có keys, thử lấy value đầu tiên là string
+        const keys = Object.keys(responseData);
+        for (const key of keys) {
+          if (typeof responseData[key] === 'string' && responseData[key].trim()) {
+            return responseData[key].trim();
+          }
+        }
+        
+        // Fallback: stringify object
+        console.warn('Unknown response format:', responseData);
+        return `Server response: ${JSON.stringify(responseData)}`;
+      }
+      
+      // 4. Fallback cuối cùng
+      return 'Phản hồi không hợp lệ từ server.';
       
     } catch (error) {
-      console.error(`Error with ${endpoint}:`, error);
+      console.error(`Error with endpoint ${endpoint}:`, {
+        status: error.response?.status,
+        data: error.response?.data,
+        message: error.message
+      });
       
-      // Log chi tiết các loại lỗi
-      if (error.code === 'ECONNREFUSED') {
-        console.log('Connection refused - Server may be offline');
-      } else if (error.code === 'ERR_NETWORK') {
-        console.log('Network error - Possible CORS issue');
-      } else if (error.code === 'ENOTFOUND') {
-        console.log('Host not found - Check IP address');
-      } else if (error.response) {
-        console.log(`Server error: ${error.response.status} - ${error.response.statusText}`);
-        console.log('Response data:', error.response.data);
-      } else if (error.request) {
-        console.log('Request made but no response received');
-        console.log('Request config:', error.config);
-      } else {
-        console.log('Unknown error:', error.message);
+      // Nếu là endpoint cuối cùng và vẫn lỗi
+      if (endpoint === endpoints[endpoints.length - 1]) {
+        return `Lỗi kết nối: ${error.message}`;
       }
       
-      // Continue với endpoint tiếp theo thay vì return ngay
       continue;
     }
   }
   
-  // Nếu tất cả endpoints đều fail
-  console.log('💥 All endpoints failed');
-  return `Xin lỗi, tôi không thể kết nối đến server AI lúc này. Về "${userInput}", tôi sẽ cố gắng hỗ trợ bạn khi kết nối được khôi phục. Vui lòng kiểm tra:
-  
-1. Server AI có đang chạy không?
-2. Địa chỉ IP 192.168.1.31:8000 có đúng không?
-3. Firewall/CORS có đang chặn không?`;
+  return `Xin lỗi, không thể kết nối đến server AI. Vui lòng thử lại sau.`;
 }
 
+// Hàm suggestedQuestions
+// Hàm fetchSuggestedQuestions với fallback endpoint
+async function fetchSuggestedQuestions() {
+  const endpoints = [
+    '/get_unique_questions',  // React proxy
+    'http://localhost:3001/api/ai/get_unique_questions',  // Proxy server backup
+    'https://3a686927e9b9.ngrok-free.app/get_unique_questions'  // Direct connection backup
+  ];
+
+  const fallbackQuestions = [
+    "trường có bao nhiêu khoa ?",
+    "đối tượng tuyển sinh của trường đại học",
+    "phạm vi tuyển sinh của trường đại học",
+    "hi"
+  ];
+
+  for (const endpoint of endpoints) {
+    try {
+      const response = await axios.get(endpoint, {
+        timeout: 50000,
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        withCredentials: false
+      });
+
+      console.log("Suggested Questions Response:", response.data);
+
+      const responseData = response.data;
+
+      // ✅ Xử lý đúng format trả về
+      if (responseData?.unique_questions && Array.isArray(responseData.unique_questions)) {
+        return responseData.unique_questions
+          .map(item => (item.user ? item.user.trim() : null))
+          .filter(q => q); // loại bỏ null/empty
+      }
+
+      console.warn("Unknown suggested questions response format:", responseData);
+      return fallbackQuestions;
+
+    } catch (error) {
+      console.error(`Error with endpoint ${endpoint}:`, {
+        status: error.response?.status,
+        data: error.response?.data,
+        message: error.message
+      });
+
+      if (endpoint === endpoints[endpoints.length - 1]) {
+        return fallbackQuestions;
+      }
+
+      continue;
+    }
+  }
+
+  return fallbackQuestions;
+}
 
 function Bg() {
   const texture = useTexture('/images/bg.webp');
@@ -366,6 +422,11 @@ function ModelDesign() {
       timestamp: new Date()
     }
   ]);
+
+  // State cho suggested questions
+  const [suggestedQuestions, setSuggestedQuestions] = useState([]);
+  // const [showSuggestions, setShowSuggestions] = useState(true);
+
   const [currentTime, setCurrentTime] = useState(
     new Date().toLocaleTimeString('en-US', { 
       hour: '2-digit', 
@@ -395,6 +456,36 @@ function ModelDesign() {
     
     testConnection();
   }, [sessionId]);
+
+  useEffect(() => {
+    console.log('🚀 Component mounted, loading suggested questions...');
+    
+    const loadSuggestions = async () => {
+      try {
+        const questions = await fetchSuggestedQuestions();
+        console.log('📝 Setting suggested questions:', questions);
+        setSuggestedQuestions(questions.slice(0, 5)); // Chỉ lấy 5 câu đầu
+
+        // Force log state để debug
+        setTimeout(() => {
+          console.log('📊 Current suggestedQuestions state:', questions.slice(0, 5));
+          console.log('📊 Current showSuggestions state:', true);
+        }, 100);
+        
+      } catch (error) {
+        console.error('❌ Error in loadSuggestions:', error);
+        // Vẫn set fallback questions
+        setSuggestedQuestions([
+          "trường có bao nhiêu khoa ?",
+          "đối tượng tuyển sinh của trường đại học", 
+          "phạm vi tuyển sinh của trường đại học",
+          "hi",
+        ]);
+      }
+    };
+    
+    loadSuggestions();
+  }, []);
 
   // Kiểm tra kích thước màn hình
   useEffect(() => {
@@ -457,13 +548,67 @@ function ModelDesign() {
     console.log('Connection Status:', connectionStatus);
   }, [sessionId, connectionStatus]);
 
+  async function handleSuggestedQuestionClick(question) {
+    if (isProcessing) return;
+    
+    const userMessage = {
+      id: Date.now(),
+      type: 'user',
+      content: question,
+      timestamp: new Date()
+    };
+
+    const newMessages = [...messages, userMessage];
+    setMessages(newMessages);
+    
+    setIsProcessing(true);
+
+    try {
+      const aiResponse = await callAIAssistant(question, sessionId);
+      
+      const aiMessage = {
+        id: Date.now() + 1,
+        type: 'ai',
+        content: aiResponse,
+        timestamp: new Date()
+      };
+      
+      const updatedMessages = [...newMessages, aiMessage];
+      setMessages(updatedMessages);
+      
+      // Kích hoạt speech nếu không phải error message
+      if (!aiResponse.includes('không thể kết nối') && !aiResponse.includes('Phản hồi không hợp lệ')) {
+        setSpeechText(aiResponse);
+        setIsTyping(true);
+        setSpeak(true);
+        setConnectionStatus('connected');
+      } else {
+        setConnectionStatus('failed');
+      }
+      
+    } catch (error) {
+      const errorMessage = {
+        id: Date.now() + 1,
+        type: 'ai',
+        content: `Đã xảy ra lỗi: ${error.message}`,
+        timestamp: new Date()
+      };
+      
+      const updatedMessages = [...newMessages, errorMessage];
+      setMessages(updatedMessages);
+      setConnectionStatus('failed');
+    }
+    
+    setIsProcessing(false);
+  }
+
   // Hàm gọi API Speech-to-Text
   async function callSpeechToText(audioBlob) {
     const formData = new FormData();
     formData.append('file', audioBlob, 'recording.wav');
 
     const endpoints = [
-      'https://57a835eeb2ec.ngrok-free.app/transcribe',
+      'https://40cb57cb8ef5.ngrok-free.app/transcribe',
       '/transcribe', // Nếu có proxy
     ];
 
@@ -638,24 +783,16 @@ function playerEnded() {
       timestamp: new Date()
     };
 
-    // Cập nhật messages với tin nhắn user
     const newMessages = [...messages, userMessage];
     setMessages(newMessages);
 
-    // Lưu input và clear
     const currentInput = text.trim();
     setText("");
     setIsProcessing(true);
 
     try {
-      console.log('🚀 Sending message to AI:', currentInput);
-      
-      // Gọi AI API với improved error handling
       const aiResponse = await callAIAssistant(currentInput, sessionId);
       
-      console.log('🤖 AI Response received:', aiResponse);
-      
-      // Tạo tin nhắn AI
       const aiMessage = {
         id: Date.now() + 1,
         type: 'ai',
@@ -663,12 +800,11 @@ function playerEnded() {
         timestamp: new Date()
       };
       
-      // Cập nhật messages với phản hồi AI
       const updatedMessages = [...newMessages, aiMessage];
       setMessages(updatedMessages);
       
-      // Chỉ kích hoạt speech nếu không phải error message
-      if (!aiResponse.includes('không thể kết nối')) {
+      // Kích hoạt speech nếu không phải error message
+      if (!aiResponse.includes('không thể kết nối') && !aiResponse.includes('Phản hồi không hợp lệ')) {
         setSpeechText(aiResponse);
         setIsTyping(true);
         setSpeak(true);
@@ -678,13 +814,10 @@ function playerEnded() {
       }
       
     } catch (error) {
-      console.error('💥 Error in handleSend:', error);
-      
-      // Thêm tin nhắn lỗi chi tiết hơn
       const errorMessage = {
         id: Date.now() + 1,
         type: 'ai',
-        content: `Xin lỗi, đã xảy ra lỗi khi xử lý yêu cầu: ${error.message}. Vui lòng kiểm tra kết nối mạng và thử lại.`,
+        content: `Đã xảy ra lỗi: ${error.message}`,
         timestamp: new Date()
       };
       
@@ -833,7 +966,7 @@ function playerEnded() {
               >
                 {message.content}
               </div>
-            ))}
+            ))}        
             {/* Loading indicator */}
             {isProcessing && (
               <div className="message ai-message processing">
@@ -841,6 +974,22 @@ function playerEnded() {
                   <span></span>
                   <span></span>
                   <span></span>
+                </div>
+              </div>
+            )}
+            {!text.trim() && suggestedQuestions.length > 0 && (
+              <div className="suggested-questions user-suggestions">
+                <div className="suggestions-grid">
+                  {suggestedQuestions.map((question, index) => (
+                    <button
+                      key={index}
+                      className="suggestion-button"
+                      onClick={() => handleSuggestedQuestionClick(question)}
+                      disabled={isProcessing}
+                    >
+                      {question}
+                    </button>
+                  ))}
                 </div>
               </div>
             )}
