@@ -17,11 +17,16 @@ const _ = require('lodash');
 
 const host = 'http://localhost:5000'; // Server TTS
 
-// AI Endpoints - sử dụng proxy để tránh CORS
-const AI_ENDPOINTS = [
-  //'http://localhost:3001/api/ai',  // Proxy server
-  'https://3a686927e9b9.ngrok-free.app/'      // Fallback: Direct connection
-];
+// Cấu hình Viettel TTS
+const VIETTEL_TTS_CONFIG = {
+  url: 'https://viettelai.vn/tts/speech_synthesis',
+  token: '', // API key (token) b2b7e8995ec7b6295eac0f5023a86990
+  voice: 'hn-quynhanh',
+  speed: 1.0,
+  tts_return_option: 3, // MP3 format
+  without_filter: false
+};
+
 
 // Utility function để tạo UUID v4
 function generateUUID() {
@@ -149,24 +154,52 @@ function Avatar({ avatar_url, speak, setSpeak, text, setAudioSource, playing }) 
   const [clips, setClips] = useState([]);
   const mixer = useMemo(() => new THREE.AnimationMixer(gltf.scene), []);
 
+  // useEffect(() => {
+  //   if (!speak) return;
+  //   console.log('Gửi văn bản tới server TTS:', text);
+  //   makeSpeech(text)
+  //     .then(response => {
+  //       let { blendData, filename } = response.data;
+  //       let newClips = [
+  //         createAnimation(blendData, morphTargetDictionaryBody, 'HG_Body'),
+  //         createAnimation(blendData, morphTargetDictionaryLowerTeeth, 'HG_TeethLower')
+  //       ];
+  //       filename = `${host}${filename}?t=${Date.now()}`;
+  //       console.log('File MP3:', filename);
+  //       setClips(newClips);
+  //       setAudioSource(filename);
+  //       setSpeak(false);
+  //     })
+  //     .catch(err => {
+  //       console.error('Lỗi khi tạo âm thanh:', err.message);
+  //       setSpeak(false);
+  //     });
+  // }, [speak, text, setAudioSource]);
+
   useEffect(() => {
     if (!speak) return;
-    console.log('Gửi văn bản tới server TTS:', text);
+    console.log('Gửi văn bản tới Viettel TTS:', text);
+    
     makeSpeech(text)
       .then(response => {
         let { blendData, filename } = response.data;
-        let newClips = [
-          createAnimation(blendData, morphTargetDictionaryBody, 'HG_Body'),
-          createAnimation(blendData, morphTargetDictionaryLowerTeeth, 'HG_TeethLower')
-        ];
-        filename = `${host}${filename}?t=${Date.now()}`;
-        console.log('File MP3:', filename);
+        
+        // Với Viettel TTS, có thể không có blendData
+        let newClips = [];
+        if (blendData && blendData.length > 0) {
+          newClips = [
+            createAnimation(blendData, morphTargetDictionaryBody, 'HG_Body'),
+            createAnimation(blendData, morphTargetDictionaryLowerTeeth, 'HG_TeethLower')
+          ];
+        }
+        
+        console.log('File MP3 từ Viettel:', filename);
         setClips(newClips);
         setAudioSource(filename);
         setSpeak(false);
       })
       .catch(err => {
-        console.error('Lỗi khi tạo âm thanh:', err.message);
+        console.error('Lỗi khi tạo âm thanh Viettel:', err.message);
         setSpeak(false);
       });
   }, [speak, text, setAudioSource]);
@@ -214,161 +247,152 @@ function Avatar({ avatar_url, speak, setSpeak, text, setAudioSource, playing }) 
 }
 
 // Hàm gọi API TTS (giữ nguyên)
-function makeSpeech(text) {
+// function makeSpeech(text) {
+//   const cleanedText = cleanText(text);
+//   console.log('Văn bản gửi đi TTS:', cleanedText);
+//   if (!cleanedText) {
+//     console.error('Lỗi: Văn bản sau khi làm sạch là rỗng');
+//     return Promise.reject(new Error('Văn bản rỗng sau khi làm sạch'));
+//   }
+//   return axios.post(host + '/talk', { text: cleanedText, language: 'vi-VN', voice: 'vi-VN-HoaiMy' });
+// }
+
+async function makeSpeech(text) {
   const cleanedText = cleanText(text);
   console.log('Văn bản gửi đi TTS:', cleanedText);
+  
   if (!cleanedText) {
     console.error('Lỗi: Văn bản sau khi làm sạch là rỗng');
     return Promise.reject(new Error('Văn bản rỗng sau khi làm sạch'));
   }
-  return axios.post(host + '/talk', { text: cleanedText, language: 'vi-VN', voice: 'vi-VN-HoaiMy' });
+
+  try {
+    const response = await axios.post(VIETTEL_TTS_CONFIG.url, {
+      text: cleanedText,
+      voice: VIETTEL_TTS_CONFIG.voice,
+      speed: VIETTEL_TTS_CONFIG.speed,
+      tts_return_option: VIETTEL_TTS_CONFIG.tts_return_option,
+      token: VIETTEL_TTS_CONFIG.token,
+      without_filter: VIETTEL_TTS_CONFIG.without_filter
+    }, {
+      headers: {
+        'accept': '*/*',
+        'Content-Type': 'application/json'
+      },
+      responseType: 'blob' // Quan trọng: nhận file audio dạng blob
+    });
+
+    // Tạo URL cho audio blob
+    const audioBlob = response.data;
+    const audioUrl = URL.createObjectURL(audioBlob);
+    
+    // Trả về format giống server cũ để không phải sửa logic khác
+    return {
+      data: {
+        blendData: [], // Có thể để trống nếu không cần morph targets
+        filename: audioUrl
+      }
+    };
+    
+  } catch (error) {
+    console.error('Lỗi Viettel TTS:', error);
+    throw new Error(`Lỗi TTS: ${error.message}`);
+  }
 }
 
 // Hàm gọi API AI Assistant với React proxy
 async function callAIAssistant(userInput, sessionId) {
-  const endpoints = [
-    '/ask',  // React proxy
-    'http://localhost:3001/api/ai/ask',  // Proxy server backup
-    'https://3a686927e9b9.ngrok-free.app/ask'  // Direct connection backup
-  ];
+  const endpoint = 'http://localhost:4000/api/ask';
   
-  for (const endpoint of endpoints) {
-    try {
-      const response = await axios.post(endpoint, {
-        user_input: userInput,
-        session_id: sessionId
-      }, {
-        timeout: 50000,
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        withCredentials: false
-      });
-      
-      // Debug: Log response để xem structure
-      console.log('API Response:', response.data);
-      
-      const responseData = response.data;
-      
-      // Xử lý response theo thứ tự ưu tiên
-      // 1. Nếu response là string trực tiếp
-      if (typeof responseData === 'string' && responseData.trim()) {
-        return responseData.trim();
-      }
-      
-      // 2. Nếu response có các field thông thường
-      if (responseData?.response && typeof responseData.response === 'string') {
-        return responseData.response.trim();
-      }
-      
-      if (responseData?.answer && typeof responseData.answer === 'string') {
-        return responseData.answer.trim();
-      }
-      
-      if (responseData?.message && typeof responseData.message === 'string') {
-        return responseData.message.trim();
-      }
-      
-      if (responseData?.data && typeof responseData.data === 'string') {
-        return responseData.data.trim();
-      }
-      
-      // 3. Nếu response là object, thử convert thành string
-      if (typeof responseData === 'object' && responseData !== null) {
-        // Nếu có keys, thử lấy value đầu tiên là string
-        const keys = Object.keys(responseData);
-        for (const key of keys) {
-          if (typeof responseData[key] === 'string' && responseData[key].trim()) {
-            return responseData[key].trim();
-          }
-        }
-        
-        // Fallback: stringify object
-        console.warn('Unknown response format:', responseData);
-        return `Server response: ${JSON.stringify(responseData)}`;
-      }
-      
-      // 4. Fallback cuối cùng
-      return 'Phản hồi không hợp lệ từ server.';
-      
-    } catch (error) {
-      console.error(`Error with endpoint ${endpoint}:`, {
-        status: error.response?.status,
-        data: error.response?.data,
-        message: error.message
-      });
-      
-      // Nếu là endpoint cuối cùng và vẫn lỗi
-      if (endpoint === endpoints[endpoints.length - 1]) {
-        return `Lỗi kết nối: ${error.message}`;
-      }
-      
-      continue;
+  try {
+    const response = await axios.post(endpoint, {
+      user_input: userInput,   // giống curl
+      session_id: sessionId    // giống curl
+    }, {
+      timeout: 100000,
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      withCredentials: false
+    });
+
+    console.log('API Response:', response.data);
+    const responseData = response.data;
+
+    // Nếu server trả string
+    if (typeof responseData === 'string') {
+      return responseData.trim();
     }
+
+    // Nếu server trả object có field chuẩn
+    if (responseData?.response) return responseData.response.trim();
+    if (responseData?.answer) return responseData.answer.trim();
+    if (responseData?.message) return responseData.message.trim();
+    if (responseData?.data) return responseData.data.trim();
+
+    // Nếu là object khác => stringify
+    if (typeof responseData === 'object') {
+      return JSON.stringify(responseData, null, 2);
+    }
+
+    return 'Phản hồi không hợp lệ từ server.';
+
+  } catch (error) {
+    console.error('Error calling API:', {
+      status: error.response?.status,
+      data: error.response?.data,
+      message: error.message
+    });
+    return `Lỗi kết nối: ${error.message}`;
   }
-  
-  return `Xin lỗi, không thể kết nối đến server AI. Vui lòng thử lại sau.`;
 }
+
 
 // Hàm suggestedQuestions
-// Hàm fetchSuggestedQuestions với fallback endpoint
 async function fetchSuggestedQuestions() {
-  const endpoints = [
-    '/get_unique_questions',  // React proxy
-    'http://localhost:3001/api/ai/get_unique_questions',  // Proxy server backup
-    'https://3a686927e9b9.ngrok-free.app/get_unique_questions'  // Direct connection backup
-  ];
+  const endpoint = "http://localhost:4000/api/questions"; // gọi qua proxy
 
-  const fallbackQuestions = [
-    "trường có bao nhiêu khoa ?",
-    "đối tượng tuyển sinh của trường đại học",
-    "phạm vi tuyển sinh của trường đại học",
-    "hi"
-  ];
-
-  for (const endpoint of endpoints) {
-    try {
-      const response = await axios.get(endpoint, {
-        timeout: 50000,
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        withCredentials: false
-      });
-
-      console.log("Suggested Questions Response:", response.data);
-
-      const responseData = response.data;
-
-      // ✅ Xử lý đúng format trả về
-      if (responseData?.unique_questions && Array.isArray(responseData.unique_questions)) {
-        return responseData.unique_questions
-          .map(item => (item.user ? item.user.trim() : null))
-          .filter(q => q); // loại bỏ null/empty
+  try {
+    console.log(`📡 Attempting to fetch from: ${endpoint}`);
+    const response = await axios.post(endpoint, {}, {
+      timeout: 50000,
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json"
       }
+    });
 
-      console.warn("Unknown suggested questions response format:", responseData);
-      return fallbackQuestions;
+    console.log("✅ Response received:", response.data);
 
-    } catch (error) {
-      console.error(`Error with endpoint ${endpoint}:`, {
-        status: error.response?.status,
-        data: error.response?.data,
-        message: error.message
-      });
+    const responseData = response.data;
 
-      if (endpoint === endpoints[endpoints.length - 1]) {
-        return fallbackQuestions;
+    // Format { unique_questions: [{ user: "câu hỏi" }] }
+    if (responseData?.unique_questions && Array.isArray(responseData.unique_questions)) {
+      const questions = responseData.unique_questions
+        .map(item => item?.user?.trim() || null)
+        .filter(Boolean);
+
+      if (questions.length > 0) {
+        console.log("Successfully extracted questions:", questions);
+        return questions;
       }
-
-      continue;
     }
-  }
 
-  return fallbackQuestions;
+    console.warn(`No valid questions found in response:`, responseData);
+    return [];
+
+  } catch (error) {
+    console.error(`Error with endpoint ${endpoint}:`, {
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      message: error.message
+    });
+    throw new Error("Không thể lấy câu hỏi gợi ý từ API. Vui lòng kiểm tra kết nối mạng và thử lại.");
+  }
 }
+
 
 function Bg() {
   const texture = useTexture('/images/bg.webp');
@@ -380,15 +404,62 @@ function Bg() {
   );
 }
 
+
+function VoiceStatusIndicator({
+  isVoiceChatActive,
+  isSpeaking,
+  isProcessing,
+  voiceActivityLevel = 0,
+  onStop
+}) {
+  if (!isVoiceChatActive) return null;
+  
+  return (
+    <div className="voice-status-indicator">
+      <div className="voice-status-content">
+        <div className={`voice-icon ${isSpeaking ? 'speaking' : 'listening'}`}>
+          <Mic size={20} />
+          {isSpeaking && <div className="pulse-ring"></div>}
+        </div>
+       
+        <div className="voice-info">
+          <div className="voice-status-text">
+            {isProcessing ? 'Đang xử lý...' :
+            isSpeaking ? 'Đang nghe bạn nói...' :
+            'Sẵn sàng nghe...'}
+          </div>
+         
+          <div className="volume-meter">
+            <div
+              className="volume-bar"
+              style={{ width: `${Math.min(voiceActivityLevel * 100, 100)}%` }}
+            ></div>
+          </div>
+        </div>
+       
+        <button
+          onClick={onStop}
+          className="stop-voice-button"
+          title="Dừng voice chat"
+        >
+          ×
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ModelDesign() {
   const navigate = useNavigate();
   const audioPlayer = useRef();
   const chatAreaRef = useRef();
+
   // State cho voice recording
   const [isRecording, setIsRecording] = useState(false);
   const [mediaRecorder, setMediaRecorder] = useState(null);
   const [audioChunks, setAudioChunks] = useState([]);
-  
+
+
   // Session ID - tạo UUID duy nhất cho mỗi phiên
   const [sessionId] = useState(() => generateUUID());
   
@@ -437,25 +508,25 @@ function ModelDesign() {
   );
 
   // Test connection khi component mount
-  useEffect(() => {
-    const testConnection = async () => {
-      console.log('🔍 Testing connection to AI server...');
-      try {
-        const response = await callAIAssistant('test', sessionId);
-        if (response.includes('không thể kết nối')) {
-          setConnectionStatus('failed');
-        } else {
-          setConnectionStatus('connected');
-          console.log('✅ Connection test successful');
-        }
-      } catch (error) {
-        setConnectionStatus('failed');
-        console.log('❌ Connection test failed:', error);
-      }
-    };
+  // useEffect(() => {
+  //   const testConnection = async () => {
+  //     console.log('🔍 Testing connection to AI server...');
+  //     try {
+  //       const response = await callAIAssistant('test', sessionId);
+  //       if (response.includes('không thể kết nối')) {
+  //         setConnectionStatus('failed');
+  //       } else {
+  //         setConnectionStatus('connected');
+  //         console.log('✅ Connection test successful');
+  //       }
+  //     } catch (error) {
+  //       setConnectionStatus('failed');
+  //       console.log('❌ Connection test failed:', error);
+  //     }
+  //   };
     
-    testConnection();
-  }, [sessionId]);
+  //   testConnection();
+  // }, [sessionId]);
 
   useEffect(() => {
     console.log('🚀 Component mounted, loading suggested questions...');
@@ -548,6 +619,7 @@ function ModelDesign() {
     console.log('Connection Status:', connectionStatus);
   }, [sessionId, connectionStatus]);
 
+
   async function handleSuggestedQuestionClick(question) {
     if (isProcessing) return;
     
@@ -602,164 +674,275 @@ function ModelDesign() {
     setIsProcessing(false);
   }
 
-  // Hàm gọi API Speech-to-Text
-  async function callSpeechToText(audioBlob) {
-    const formData = new FormData();
-    formData.append('file', audioBlob, 'recording.wav');
+// Hàm gọi API Speech-to-Text
+// Hàm gọi API Speech-to-Text
+async function callSpeechToText(audioBlob) {
+  // Chuyển đổi audio sang WAV trước khi gửi
+  const wavBlob = await convertToWav(audioBlob);
+  const formData = new FormData();
+  formData.append('file', wavBlob, 'recording.wav');
 
-    const endpoints = [
-      'https://40cb57cb8ef5.ngrok-free.app/transcribe',
-      '/transcribe', // Nếu có proxy
-    ];
+  const endpoint = 'http://localhost:8000/recognize-stream';
 
-    for (const endpoint of endpoints) {
-      try {
-        console.log(`Calling Speech-to-Text: ${endpoint}`);
-        
-        const response = await axios.post(endpoint, formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
-          timeout: 30000, // 30s cho upload audio
-        });
+  try {
+    console.log(`Gọi API Speech-to-Text: ${endpoint}`);
 
-        console.log('Speech-to-Text response:', response.data);
-        return response.data.text || response.data.transcription || '';
-        
-      } catch (error) {
-        console.error(`STT Error with ${endpoint}:`, error);
-        continue;
-      }
-    }
-    
-    throw new Error('Không thể kết nối đến Speech-to-Text server');
-  }
-  // Bắt đầu recording
-  async function startRecording() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          sampleRate: 16000,
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true
-        } 
-      });
-      
-      const recorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus'
-      });
-      
-      const chunks = [];
-      
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          chunks.push(event.data);
-        }
-      };
-      
-      recorder.onstop = async () => {
-        const audioBlob = new Blob(chunks, { type: 'audio/webm' });
-        await processVoiceInput(audioBlob);
-        
-        // Dừng tất cả tracks
-        stream.getTracks().forEach(track => track.stop());
-      };
-      
-      recorder.start();
-      setMediaRecorder(recorder);
-      setAudioChunks(chunks);
-      setIsRecording(true);
-      
-      console.log('🎤 Started recording...');
-      
-    } catch (error) {
-      console.error('❌ Error starting recording:', error);
-      alert('Không thể truy cập microphone. Vui lòng cho phép quyền truy cập.');
-    }
-  }
+    const response = await axios.post(endpoint, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+        'Accept': 'application/json'
+      },
+      timeout: 30000,
+    });
 
-  // Dừng recording
-  function stopRecording() {
-    if (mediaRecorder && isRecording) {
-      mediaRecorder.stop();
-      setIsRecording(false);
-      setMediaRecorder(null);
-      console.log('⏹️ Stopped recording');
-    }
-  }
+    console.log('Phản hồi Speech-to-Text:', response.data);
 
-  // Xử lý voice input
-  async function processVoiceInput(audioBlob) {
-    setIsProcessing(true);
-    
-    try {
-      // Convert to WAV if needed
-      const wavBlob = await convertToWav(audioBlob);
-      
-      // Gọi Speech-to-Text API
-      console.log('🔄 Converting speech to text...');
-      const transcribedText = await callSpeechToText(wavBlob);
-      
-      if (transcribedText.trim()) {
-        // Set text vào input
-        setText(transcribedText);
-        
-        // Tự động gửi luôn
-        const userMessage = {
-          id: Date.now(),
-          type: 'user',
-          content: transcribedText.trim(),
-          timestamp: new Date()
-        };
-
-        const newMessages = [...messages, userMessage];
-        setMessages(newMessages);
-
-        // Gọi AI
-        const aiResponse = await callAIAssistant(transcribedText, sessionId);
-        
-        const aiMessage = {
-          id: Date.now() + 1,
-          type: 'ai',
-          content: aiResponse,
-          timestamp: new Date()
-        };
-        
-        setMessages([...newMessages, aiMessage]);
-        
-        if (!aiResponse.includes('không thể kết nối')) {
-          setSpeechText(aiResponse);
-          setIsTyping(true);
-          setSpeak(true);
-          setConnectionStatus('connected');
-        }
-        
-        setText(""); // Clear input
+    // Cập nhật logic xử lý response theo format mới
+    if (response.data && response.data.status === 'success') {
+      if (response.data.transcript && response.data.transcript.trim()) {
+        return response.data.transcript.trim();
       } else {
-        alert('Không nhận dạng được giọng nói. Vui lòng thử lại.');
+        // Xử lý trường hợp code 204 (không có kết quả)
+        if (response.data.code === 204) {
+          throw new Error('Không nhận dạng được giọng nói. Vui lòng nói to và rõ hơn.');
+        } else {
+          throw new Error('Không nhận được văn bản từ API');
+        }
       }
-      
-    } catch (error) {
-      console.error('❌ Voice processing error:', error);
-      alert('Lỗi xử lý giọng nói: ' + error.message);
+    } else {
+      // Xử lý trường hợp status là 'error'
+      throw new Error(response.data.message || 'Nhận dạng giọng nói thất bại');
     }
+  } catch (error) {
+    console.error(`Lỗi Speech-to-Text với ${endpoint}:`, error.message);
     
-    setIsProcessing(false);
+    if (error.response) {
+      const errorData = error.response.data;
+      
+      // Xử lý response error theo format mới
+      if (errorData && errorData.status === 'error') {
+        throw new Error(`Lỗi API: ${errorData.message} (Mã: ${errorData.code})`);
+      } else if (error.response.status === 400) {
+        throw new Error(`Lỗi định dạng file: ${errorData.detail || 'File không hợp lệ'}`);
+      } else if (error.response.status === 500) {
+        throw new Error(`Lỗi server: ${errorData.detail || errorData.message || 'Lỗi xử lý âm thanh'}`);
+      } else {
+        throw new Error(`Nhận dạng giọng nói thất bại: ${errorData.detail || errorData.message || 'Lỗi không xác định'} (Mã: ${error.response.status})`);
+      }
+    } else if (error.code === 'ECONNABORTED') {
+      throw new Error('Yêu cầu hết thời gian sau 30 giây');
+    } else {
+      throw new Error(`Lỗi mạng: ${error.message}`);
+    }
+  }
+}
+
+async function startRecording() {
+  try {
+    // Kiểm tra quyền truy cập microphone
+    const permissionStatus = await navigator.permissions.query({ name: 'microphone' });
+    if (permissionStatus.state === 'denied') {
+      throw new Error('Quyền truy cập microphone bị từ chối. Vui lòng cấp quyền trong cài đặt trình duyệt.');
+    } else if (permissionStatus.state === 'prompt') {
+      console.log('Yêu cầu cấp quyền microphone...');
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+      audio: {
+        sampleRate: 8000, // Đảm bảo sampleRate phù hợp với API
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true
+      } 
+    });
+
+    // Danh sách các định dạng âm thanh hỗ trợ
+    const supportedMimeTypes = ['audio/wav', 'audio/webm', 'audio/ogg'];
+    let mimeType = supportedMimeTypes.find(type => MediaRecorder.isTypeSupported(type));
+
+    if (!mimeType) {
+      throw new Error('Trình duyệt không hỗ trợ bất kỳ định dạng âm thanh nào (WAV, WebM, OGG). Vui lòng thử trình duyệt khác.');
+    }
+
+    console.log(`Sử dụng định dạng âm thanh: ${mimeType}`);
+
+    const recorder = new MediaRecorder(stream, { mimeType });
+    const chunks = [];
+
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        chunks.push(event.data);
+      }
+    };
+
+    recorder.onstop = async () => {
+      const audioBlob = new Blob(chunks, { type: mimeType });
+      await processVoiceInput(audioBlob);
+      stream.getTracks().forEach(track => track.stop());
+    };
+
+    recorder.start(100);
+    setMediaRecorder(recorder);
+    setAudioChunks(chunks);
+    setIsRecording(true);
+
+    console.log('Bắt đầu ghi âm với mimeType:', mimeType);
+
+  } catch (error) {
+    console.error('Lỗi khi bắt đầu ghi âm:', error);
+    alert(`Không thể truy cập microphone: ${error.message}. Vui lòng kiểm tra quyền microphone trong cài đặt trình duyệt hoặc thử trình duyệt khác.`);
+  }
+}
+
+function stopRecording() {
+  if (mediaRecorder && isRecording) {
+    mediaRecorder.stop();
+    setIsRecording(false);
+    setMediaRecorder(null);
+    console.log('Dừng ghi âm');
+  }
+}
+
+async function processVoiceInput(audioBlob) {
+  setIsProcessing(true);
+
+  try {
+    console.log('🔄 Đang chuyển giọng nói thành văn bản...');
+    const transcribedText = await callSpeechToText(audioBlob);
+
+    if (transcribedText.trim()) {
+      setText(transcribedText);
+
+      const userMessage = {
+        id: Date.now(),
+        type: 'user',
+        content: transcribedText.trim(),
+        timestamp: new Date()
+      };
+
+      const newMessages = [...messages, userMessage];
+      setMessages(newMessages);
+
+      const aiResponse = await callAIAssistant(transcribedText, sessionId);
+
+      const aiMessage = {
+        id: Date.now() + 1,
+        type: 'ai',
+        content: aiResponse,
+        timestamp: new Date()
+      };
+
+      setMessages([...newMessages, aiMessage]);
+
+      if (!aiResponse.includes('không thể kết nối')) {
+        setSpeechText(aiResponse);
+        setIsTyping(true);
+        setSpeak(true);
+        setConnectionStatus('connected');
+      }
+
+      setText("");
+    } else {
+      alert('Không nhận dạng được giọng nói. Vui lòng thử lại.');
+    }
+
+  } catch (error) {
+    console.error('❌ Lỗi xử lý giọng nói:', error);
+    // Hiển thị thông báo lỗi chi tiết hơn
+    alert('Lỗi nhận dạng giọng nói: ' + error.message);
   }
 
-// Convert audio to WAV format
-  async function convertToWav(audioBlob) {
-    // Đơn giản hóa: return blob gốc, server sẽ handle conversion
-    return audioBlob;
+  setIsProcessing(false);
+}
+
+async function convertToWav(audioBlob) {
+  // Nếu đã là WAV, vẫn cần kiểm tra và chuyển đổi để đảm bảo format phù hợp
+  return new Promise((resolve, reject) => {
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
+    const fileReader = new FileReader();
+
+    fileReader.onload = async function(event) {
+      try {
+        const arrayBuffer = event.target.result;
+        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+        const wavBlob = audioBufferToWav(audioBuffer);
+        resolve(wavBlob);
+      } catch (error) {
+        console.error('Lỗi khi chuyển đổi âm thanh:', error);
+        // Fallback: trả về blob gốc nếu không thể chuyển đổi
+        resolve(audioBlob);
+      }
+    };
+
+    fileReader.onerror = () => {
+      console.error('Lỗi khi đọc file âm thanh');
+      resolve(audioBlob);
+    };
+
+    fileReader.readAsArrayBuffer(audioBlob);
+  });
+}
+
+function audioBufferToWav(buffer) {
+  const length = buffer.length;
+  const numberOfChannels = 1; // Đảm bảo mono như API yêu cầu
+  const sampleRate = 8000; // Đảm bảo sample rate phù hợp với API
+  const arrayBuffer = new ArrayBuffer(44 + length * numberOfChannels * 2);
+  const view = new DataView(arrayBuffer);
+
+  const writeString = (offset, string) => {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
+  };
+
+  // WAV Header
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + length * numberOfChannels * 2, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM format
+  view.setUint16(22, numberOfChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * numberOfChannels * 2, true);
+  view.setUint16(32, numberOfChannels * 2, true);
+  view.setUint16(34, 16, true); // 16-bit
+  writeString(36, 'data');
+  view.setUint32(40, length * numberOfChannels * 2, true);
+
+  // Convert audio data to PCM
+  const channelData = buffer.getChannelData(0);
+  let offset = 44;
+  for (let i = 0; i < channelData.length; i++, offset += 2) {
+    const sample = Math.max(-1, Math.min(1, channelData[i]));
+    view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
   }
+
+  return new Blob([arrayBuffer], { type: 'audio/wav' });
+}
+
+function handleVoiceChat() {
+  if (isRecording) {
+    stopRecording();
+  } else {
+    startRecording();
+  }
+}
 
 // Audio player handlers
+
 function playerEnded() {
-    setAudioSource(null);
-    setSpeak(false);
-    setPlaying(false);
+  // Cleanup blob URL để tránh memory leak
+  if (audioSource && audioSource.startsWith('blob:')) {
+    URL.revokeObjectURL(audioSource);
   }
+  
+  setAudioSource(null);
+  setSpeak(false);
+  setPlaying(false);
+}
 
   function playerReady() {
     audioPlayer.current.audioEl.current.play();
@@ -840,16 +1023,25 @@ function playerEnded() {
     }
   }
 
-  function handleVoiceChat() {
-    if (isRecording) {
-      stopRecording();
-    } else {
-      startRecording();
-    }
-  }
+  // function handleVoiceChat() {
+  //   if (isRecording) {
+  //     stopRecording();
+  //   } else {
+  //     startRecording();
+  //   }
+  // }
+
+
 
   return (
     <div className={`container ${isMobile ? 'mobile-layout' : 'desktop-layout'}`}>
+
+        <ReactAudioPlayer
+          src={audioSource}
+          ref={audioPlayer}
+          onEnded={playerEnded}
+          onCanPlayThrough={playerReady}
+        />
       {/* Header - hiện trên cùng khi mobile */}
       {isMobile && (
         <div className="mobile-header">
