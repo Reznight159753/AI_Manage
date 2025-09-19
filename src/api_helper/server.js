@@ -11,7 +11,7 @@ app.use(express.json());
 app.post("/api/ask", async (req, res) => {
   try {
     const response = await axios.post(
-      "https://907f3d43ada4.ngrok-free.app/qa/ask",
+      "https://223bc3c22fa9.ngrok-free.app/qa/ask",
       req.body,
       { headers: { "Content-Type": "application/json", "Accept": "application/json" } }
     );
@@ -26,7 +26,7 @@ app.post("/api/ask", async (req, res) => {
 app.post("/api/questions", async (req, res) => {
   try {
     const response = await axios.post(
-      "https://907f3d43ada4.ngrok-free.app/conversation/get_unique_questions",
+      "https://223bc3c22fa9.ngrok-free.app/conversation/get_unique_questions",
       {},
       { headers: { "Content-Type": "application/json", "Accept": "application/json" } }
     );

@@ -21,11 +21,16 @@ const host = 'http://localhost:5000'; // Server TTS
 const VIETTEL_TTS_CONFIG = {
   url: 'https://viettelai.vn/tts/speech_synthesis',
   token: '', // API key (token) b2b7e8995ec7b6295eac0f5023a86990
-  voice: 'hn-quynhanh',
+  voice: 'hn-quynhanh', // 	hue-maingoc
   speed: 1.0,
   tts_return_option: 3, // MP3 format
   without_filter: false
 };
+
+// Cấu hình voice chat
+const SILENCE_DURATION = 2000; // 2 giây
+const VAD_THRESHOLD = 0.02; // Ngưỡng phát hiện giọng nói
+const TARGET_SAMPLE_RATE = 8000;
 
 
 // Utility function để tạo UUID v4
@@ -425,8 +430,8 @@ function VoiceStatusIndicator({
         <div className="voice-info">
           <div className="voice-status-text">
             {isProcessing ? 'Đang xử lý...' :
-            isSpeaking ? 'Đang nghe bạn nói...' :
-            'Sẵn sàng nghe...'}
+            isSpeaking ? 'Đang nghe...' :
+            'Sẵn sàng nghe'}
           </div>
          
           <div className="volume-meter">
@@ -456,8 +461,15 @@ function ModelDesign() {
 
   // State cho voice recording
   const [isRecording, setIsRecording] = useState(false);
-  const [mediaRecorder, setMediaRecorder] = useState(null);
-  const [audioChunks, setAudioChunks] = useState([]);
+  const [voiceLevel, setVoiceLevel] = useState(0);
+  const [silenceCountdown, setSilenceCountdown] = useState(0);
+  const audioContextRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const silenceTimerRef = useRef(null);
+  const countdownIntervalRef = useRef(null);
+  const vadProcessorRef = useRef(null);
+  const streamRef = useRef(null);
 
 
   // Session ID - tạo UUID duy nhất cho mỗi phiên
@@ -619,6 +631,37 @@ function ModelDesign() {
     console.log('Connection Status:', connectionStatus);
   }, [sessionId, connectionStatus]);
 
+  useEffect(() => {
+    const cleanup = async () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+      }
+      if (vadProcessorRef.current) {
+        vadProcessorRef.current.disconnect();
+      }
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        await audioContextRef.current.close();
+      }
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
+      }
+      if (countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+        countdownIntervalRef.current = null;
+      }
+
+      setIsRecording(false);
+      setVoiceLevel(0);
+      setSilenceCountdown(0);
+    };
+
+    return cleanup;
+  }, []);
+
 
   async function handleSuggestedQuestionClick(question) {
     if (isProcessing) return;
@@ -737,71 +780,231 @@ async function callSpeechToText(audioBlob) {
   }
 }
 
-async function startRecording() {
+const startRecording = async () => {
   try {
-    // Kiểm tra quyền truy cập microphone
     const permissionStatus = await navigator.permissions.query({ name: 'microphone' });
     if (permissionStatus.state === 'denied') {
       throw new Error('Quyền truy cập microphone bị từ chối. Vui lòng cấp quyền trong cài đặt trình duyệt.');
-    } else if (permissionStatus.state === 'prompt') {
-      console.log('Yêu cầu cấp quyền microphone...');
     }
 
-    const stream = await navigator.mediaDevices.getUserMedia({ 
+    const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
-        sampleRate: 8000, // Đảm bảo sampleRate phù hợp với API
+        sampleRate: TARGET_SAMPLE_RATE,
         channelCount: 1,
         echoCancellation: true,
-        noiseSuppression: true
-      } 
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
     });
+    streamRef.current = stream;
 
-    // Danh sách các định dạng âm thanh hỗ trợ
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)({
+      sampleRate: TARGET_SAMPLE_RATE,
+    });
+    audioContextRef.current = audioContext;
+
+    console.log(`AudioContext tạo với sample rate: ${audioContext.sampleRate}Hz`);
+
     const supportedMimeTypes = ['audio/wav', 'audio/webm', 'audio/ogg'];
-    let mimeType = supportedMimeTypes.find(type => MediaRecorder.isTypeSupported(type));
+    let mimeType = supportedMimeTypes.find((type) => MediaRecorder.isTypeSupported(type));
 
     if (!mimeType) {
-      throw new Error('Trình duyệt không hỗ trợ bất kỳ định dạng âm thanh nào (WAV, WebM, OGG). Vui lòng thử trình duyệt khác.');
+      throw new Error('Trình duyệt không hỗ trợ định dạng âm thanh nào (WAV, WebM, OGG).');
     }
 
-    console.log(`Sử dụng định dạng âm thanh: ${mimeType}`);
+    const mediaRecorder = new MediaRecorder(stream, { mimeType });
+    mediaRecorderRef.current = mediaRecorder;
 
-    const recorder = new MediaRecorder(stream, { mimeType });
-    const chunks = [];
+    audioChunksRef.current = [];
 
-    recorder.ondataavailable = (event) => {
+    mediaRecorder.ondataavailable = async (event) => {
       if (event.data.size > 0) {
-        chunks.push(event.data);
+        audioChunksRef.current.push(event.data);
       }
     };
 
-    recorder.onstop = async () => {
-      const audioBlob = new Blob(chunks, { type: mimeType });
-      await processVoiceInput(audioBlob);
-      stream.getTracks().forEach(track => track.stop());
+    mediaRecorder.start(100);
+
+    // Tạo Voice Activity Detection
+    const source = audioContext.createMediaStreamSource(stream);
+    const processor = audioContext.createScriptProcessor(1024, 1, 1);
+    vadProcessorRef.current = processor;
+
+    processor.onaudioprocess = (event) => {
+      const input = event.inputBuffer.getChannelData(0);
+      let sum = 0.0;
+      for (let i = 0; i < input.length; i++) {
+        sum += input[i] * input[i];
+      }
+      const rms = Math.sqrt(sum / input.length);
+
+      setVoiceLevel(Math.min(rms * 100, 100));
+
+      if (rms > VAD_THRESHOLD) {
+        // Có giọng nói - hủy timer silence
+        if (silenceTimerRef.current) {
+          clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = null;
+        }
+        if (countdownIntervalRef.current) {
+          clearInterval(countdownIntervalRef.current);
+          countdownIntervalRef.current = null;
+        }
+        setSilenceCountdown(0);
+      } else {
+        // Im lặng - bắt đầu đếm ngược
+        if (!silenceTimerRef.current) {
+          console.log('Bắt đầu đếm ngược 2 giây im lặng');
+
+          let countdown = SILENCE_DURATION / 100;
+          setSilenceCountdown(countdown);
+
+          countdownIntervalRef.current = setInterval(() => {
+            countdown -= 1;
+            setSilenceCountdown(Math.max(0, countdown));
+          }, 100);
+
+          silenceTimerRef.current = setTimeout(() => {
+            console.log('Đã im lặng 2 giây, gửi audio');
+            setSilenceCountdown(0);
+            if (countdownIntervalRef.current) {
+              clearInterval(countdownIntervalRef.current);
+              countdownIntervalRef.current = null;
+            }
+            sendAudioToSTT();
+          }, SILENCE_DURATION);
+        }
+      }
     };
 
-    recorder.start(100);
-    setMediaRecorder(recorder);
-    setAudioChunks(chunks);
+    source.connect(processor);
+    processor.connect(audioContext.destination);
+
     setIsRecording(true);
-
-    console.log('Bắt đầu ghi âm với mimeType:', mimeType);
-
+    console.log(`Bắt đầu ghi âm với ${TARGET_SAMPLE_RATE}Hz`);
   } catch (error) {
     console.error('Lỗi khi bắt đầu ghi âm:', error);
-    alert(`Không thể truy cập microphone: ${error.message}. Vui lòng kiểm tra quyền microphone trong cài đặt trình duyệt hoặc thử trình duyệt khác.`);
+    alert(`Không thể truy cập microphone: ${error.message}`);
   }
-}
+};
 
-function stopRecording() {
-  if (mediaRecorder && isRecording) {
-    mediaRecorder.stop();
-    setIsRecording(false);
-    setMediaRecorder(null);
-    console.log('Dừng ghi âm');
+
+const stopRecording = async () => {
+  if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+    mediaRecorderRef.current.stop();
   }
-}
+  if (streamRef.current) {
+    streamRef.current.getTracks().forEach((track) => track.stop());
+  }
+  if (vadProcessorRef.current) {
+    vadProcessorRef.current.disconnect();
+  }
+  if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+    await audioContextRef.current.close();
+  }
+  if (silenceTimerRef.current) {
+    clearTimeout(silenceTimerRef.current);
+    silenceTimerRef.current = null;
+  }
+  if (countdownIntervalRef.current) {
+    clearInterval(countdownIntervalRef.current);
+    countdownIntervalRef.current = null;
+  }
+
+  audioChunksRef.current = [];
+  setIsRecording(false);
+  setVoiceLevel(0);
+  setSilenceCountdown(0);
+  console.log('Dừng ghi âm');
+};
+
+const sendAudioToSTT = async () => {
+  if (audioChunksRef.current.length === 0) {
+    console.log('Không có âm thanh để gửi');
+    return;
+  }
+
+  setIsProcessing(true);
+  console.log('Chuẩn bị gửi âm thanh đến STT API...');
+
+  mediaRecorderRef.current.stop();
+
+  await new Promise((resolve) => {
+    mediaRecorderRef.current.onstop = resolve;
+  });
+
+  try {
+    const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+    const wavBlob = await convertToWav(audioBlob);
+
+    const audioSize = (wavBlob.size / 1024).toFixed(2);
+    console.log(`Audio: ${audioSize}KB, ${TARGET_SAMPLE_RATE}Hz`);
+
+    // Reset chunks và tiếp tục ghi
+    audioChunksRef.current = [];
+    mediaRecorderRef.current.start(100);
+
+    const transcribedText = await callSpeechToText(wavBlob);
+
+    if (transcribedText.trim()) {
+      setText(transcribedText);
+
+      // Tạo user message
+      const userMessage = {
+        id: Date.now(),
+        type: 'user',
+        content: transcribedText.trim(),
+        timestamp: new Date()
+      };
+
+      // Thêm user message trước
+      setMessages(prevMessages => [...prevMessages, userMessage]);
+
+      // Gọi AI và thêm AI message
+      try {
+        const aiResponse = await callAIAssistant(transcribedText, sessionId);
+
+        const aiMessage = {
+          id: Date.now() + Math.random(), // Đảm bảo ID unique
+          type: 'ai',
+          content: aiResponse,
+          timestamp: new Date()
+        };
+
+        // Thêm AI message
+        setMessages(prevMessages => [...prevMessages, aiMessage]);
+
+        if (!aiResponse.includes('không thể kết nối')) {
+          setSpeechText(aiResponse);
+          setIsTyping(true);
+          setSpeak(true);
+          setConnectionStatus('connected');
+        }
+      } catch (error) {
+        console.error('Lỗi gọi AI:', error);
+        
+        // Thêm error message nếu cần
+        const errorMessage = {
+          id: Date.now() + Math.random(),
+          type: 'ai',
+          content: `Lỗi kết nối: ${error.message}`,
+          timestamp: new Date()
+        };
+        
+        setMessages(prevMessages => [...prevMessages, errorMessage]);
+      }
+
+      setText("");
+    } else {
+      console.log('Không nhận dạng được giọng nói');
+    }
+
+  } catch (error) {
+    console.error('Lỗi xử lý giọng nói:', error);
+  }
+
+  setIsProcessing(false);
+};
 
 async function processVoiceInput(audioBlob) {
   setIsProcessing(true);
@@ -855,39 +1058,27 @@ async function processVoiceInput(audioBlob) {
   setIsProcessing(false);
 }
 
-async function convertToWav(audioBlob) {
-  // Nếu đã là WAV, vẫn cần kiểm tra và chuyển đổi để đảm bảo format phù hợp
-  return new Promise((resolve, reject) => {
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
-    const fileReader = new FileReader();
+const convertToWav = async (audioBlob) => {
+  const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: TARGET_SAMPLE_RATE });
+  try {
+    const arrayBuffer = await audioBlob.arrayBuffer();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+    const wavBlob = audioBufferToWav(audioBuffer);
+    return wavBlob;
+  } catch (error) {
+    console.error('Lỗi khi chuyển đổi âm thanh:', error);
+    return audioBlob;
+  } finally {
+    if (audioContext.state !== 'closed') {
+      await audioContext.close();
+    }
+  }
+};
 
-    fileReader.onload = async function(event) {
-      try {
-        const arrayBuffer = event.target.result;
-        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-
-        const wavBlob = audioBufferToWav(audioBuffer);
-        resolve(wavBlob);
-      } catch (error) {
-        console.error('Lỗi khi chuyển đổi âm thanh:', error);
-        // Fallback: trả về blob gốc nếu không thể chuyển đổi
-        resolve(audioBlob);
-      }
-    };
-
-    fileReader.onerror = () => {
-      console.error('Lỗi khi đọc file âm thanh');
-      resolve(audioBlob);
-    };
-
-    fileReader.readAsArrayBuffer(audioBlob);
-  });
-}
-
-function audioBufferToWav(buffer) {
+const audioBufferToWav = (buffer) => {
   const length = buffer.length;
-  const numberOfChannels = 1; // Đảm bảo mono như API yêu cầu
-  const sampleRate = 8000; // Đảm bảo sample rate phù hợp với API
+  const numberOfChannels = 1;
+  const sampleRate = TARGET_SAMPLE_RATE;
   const arrayBuffer = new ArrayBuffer(44 + length * numberOfChannels * 2);
   const view = new DataView(arrayBuffer);
 
@@ -897,22 +1088,20 @@ function audioBufferToWav(buffer) {
     }
   };
 
-  // WAV Header
   writeString(0, 'RIFF');
   view.setUint32(4, 36 + length * numberOfChannels * 2, true);
   writeString(8, 'WAVE');
   writeString(12, 'fmt ');
   view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true); // PCM format
+  view.setUint16(20, 1, true);
   view.setUint16(22, numberOfChannels, true);
   view.setUint32(24, sampleRate, true);
   view.setUint32(28, sampleRate * numberOfChannels * 2, true);
   view.setUint16(32, numberOfChannels * 2, true);
-  view.setUint16(34, 16, true); // 16-bit
+  view.setUint16(34, 16, true);
   writeString(36, 'data');
   view.setUint32(40, length * numberOfChannels * 2, true);
 
-  // Convert audio data to PCM
   const channelData = buffer.getChannelData(0);
   let offset = 44;
   for (let i = 0; i < channelData.length; i++, offset += 2) {
@@ -921,7 +1110,8 @@ function audioBufferToWav(buffer) {
   }
 
   return new Blob([arrayBuffer], { type: 'audio/wav' });
-}
+};
+
 
 function handleVoiceChat() {
   if (isRecording) {
@@ -1095,6 +1285,14 @@ function playerEnded() {
             />
           </Suspense>
         </Canvas>
+        {/* Voice Status Indicator */}
+        <VoiceStatusIndicator
+          isVoiceChatActive={isRecording}
+          isSpeaking={voiceLevel > 10} // hoặc threshold phù hợp
+          isProcessing={isProcessing}
+          voiceActivityLevel={voiceLevel / 100}
+          onStop={stopRecording}
+        />
         <Loader dataInterpolation={(p) => `Đang tải... vui lòng đợi`} />
         
         {/* Speech Bubble trong model */}
