@@ -21,7 +21,7 @@ const host = 'http://localhost:5000'; // Server TTS
 const VIETTEL_TTS_CONFIG = {
   url: 'https://viettelai.vn/tts/speech_synthesis',
   token: '', // API key (token) b2b7e8995ec7b6295eac0f5023a86990
-  voice: 'hn-quynhanh', // 	hue-maingoc
+  voice: 'hn-quynhanh',
   speed: 1.0,
   tts_return_option: 3, // MP3 format
   without_filter: false
@@ -31,7 +31,6 @@ const VIETTEL_TTS_CONFIG = {
 const SILENCE_DURATION = 2000; // 2 giây
 const VAD_THRESHOLD = 0.02; // Ngưỡng phát hiện giọng nói
 const TARGET_SAMPLE_RATE = 8000;
-
 
 // Utility function để tạo UUID v4
 function generateUUID() {
@@ -454,6 +453,7 @@ function VoiceStatusIndicator({
   );
 }
 
+
 function ModelDesign() {
   const navigate = useNavigate();
   const audioPlayer = useRef();
@@ -573,8 +573,8 @@ function ModelDesign() {
   // Kiểm tra kích thước màn hình
   useEffect(() => {
     const checkScreenSize = () => {
-      const isMobileScreen = window.innerWidth <= 768 || 
-                           (window.innerWidth < window.innerHeight && window.innerWidth <= 1024);
+      const isMobileScreen = window.innerWidth <= 1000 ||  // Tăng từ 768 lên 1000
+                          (window.innerWidth < window.innerHeight && window.innerWidth <= 1200);  // Tăng từ 1024 lên 1200
       setIsMobile(isMobileScreen);
     };
 
@@ -887,7 +887,6 @@ const startRecording = async () => {
     alert(`Không thể truy cập microphone: ${error.message}`);
   }
 };
-
 
 const stopRecording = async () => {
   if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
@@ -1262,8 +1261,8 @@ function playerEnded() {
         }}>
           <OrthographicCamera
             makeDefault
-            zoom={isMobile ? 800 : 1300}
-            position={[0, 1.5, 1]}
+            zoom={isMobile ? 1200 : 1300}
+            position={[0, 1.5, 0.5]}
           />
 
           <Suspense fallback={null}>
@@ -1404,7 +1403,7 @@ function playerEnded() {
                 className={`send-button ${(!text.trim() || isProcessing) ? 'disabled-button' : ''}`}
                 disabled={!text.trim() || isProcessing}
               >
-                {isProcessing ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />}
+                {isProcessing ? <Loader2 className="animate-spin" size={24} /> : <Send size={24} />}
               </button>
               <button
                 onClick={handleVoiceChat}
@@ -1412,7 +1411,7 @@ function playerEnded() {
                 // title={isRecording ? "Dừng ghi âm" : "Bắt đầu ghi âm"}
                 disabled={isProcessing}
               >
-                {isRecording ? <MicOff size={16} /> : <Mic size={16} />}
+                {isRecording ? <MicOff size={24} /> : <Mic size={24} />}
               </button>
             </div>
           </div>
